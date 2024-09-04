@@ -178,7 +178,7 @@ class Vault:
         target = p.getFilePath(virtualpath)
         return os.stat(target)
 
-    def ls(p, virtualpath, depth=1):
+    def ls(p, virtualpath, recursive=False):
         "Print a list of contents of a virtual path"
         def _realsize(n):
             "Returns the decrypted file size"
@@ -197,9 +197,8 @@ class Vault:
                 size = _realsize(st.st_size)
                 tot_size += size
                 print('%12d  %s  %s' %(size, time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
-            depth -= 1
             print('\n%d bytes in %d files and %d directories.' % (tot_size, len(files), len(dirs)))
-            if not depth: break
+            if not recursive: break
         
     def walk(p, virtualpath):
         "Traverse the virtual file system like os.walk"
@@ -345,12 +344,14 @@ if __name__ == '__main__':
         backupDirIds(v.base, extras[1])
         print('done.')
     elif extras[0] == 'ls':
+        recursive = '-r' in extras
+        if recursive: extras.remove('-r')
         if len(extras) == 1:
-            print('please use: ls <virtual_path1> [...<virtual_pathN>]')
+            print('please use: ls [-r] <virtual_path1> [...<virtual_pathN>]')
             print('(hint: try "ls /" at first)')
             sys.exit(1)
         for it in extras[1:]:
-            v.ls(it)
+            v.ls(it, recursive)
     elif extras[0] == 'decrypt':
         if len(extras) != 3:
             print('please use: decrypt <virtual_pathname_source> <real_pathname_destination>')
