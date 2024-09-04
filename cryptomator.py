@@ -186,15 +186,19 @@ class Vault:
             return n - 68 - (cb*28)
         for root, dirs, files in p.walk(virtualpath):
             print('\n  Directory of', root, '\n')
+            tot_size = 0
             for it in dirs:
                 full = os.path.join(root, it).replace('\\','/')
                 st = v.stat(full)
-                print('%12s %s %s' %('<DIR>', time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
+                print('%12s  %s  %s' %('<DIR>', time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
             for it in files:
                 full = os.path.join(root, it).replace('\\','/')
                 st = v.stat(full)
-                print('%12d %s %s' %(_realsize(st.st_size), time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
+                size = _realsize(st.st_size)
+                tot_size += size
+                print('%12d  %s  %s' %(size, time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
             depth -= 1
+            print('\n%d bytes in %d files and %d directories.' % (tot_size, len(files), len(dirs)))
             if not depth: break
         
     def walk(p, virtualpath):
@@ -262,11 +266,7 @@ def d64(s, safe=0):
     pad = b'==='
     if safe: D = base64.urlsafe_b64decode
     if type(s) != type(b''): pad = pad.decode()
-    try:
-        return D(s+pad)
-    except:
-        print('b64 string', s)
-        raise BaseException()
+    return D(s+pad)
 
 # If a DirectoryID file dir.c9r gets lost or corrupted, names in that directory can't be restored!
 def backupDirIds(vault_base, zip_backup):
