@@ -59,7 +59,7 @@ class Vault:
             p.hk = hk
         else:
             kek = hashlib.scrypt(password.encode('utf-8'),
-                                       salt=base64.b64decode(master['scryptSalt']),
+                                       salt=d64(master['scryptSalt']),
                                        n=master['scryptCostParam'], r=master['scryptBlockSize'], p=1,
                                        maxmem=0x7fffffff, dklen=32)
             primary_master_key = aes_unwrap(kek, d64(master['primaryMasterKey']))
@@ -139,7 +139,7 @@ class Vault:
             dname = decryptName(p.pk, p.hk, dirId.encode(), it.name.encode())
             print(dname)
 
-    def decryptFile(p, virtualpath, dest):
+    def decryptFile(p, virtualpath, dest, force=False):
         "Decrypt a file from a virtual pathname and puts it in real 'dest'"
         f = open(p.getFilePath(virtualpath), 'rb')
         
@@ -153,7 +153,7 @@ class Vault:
         key = dh[8:] # 256-bit AES key
         
         # Process contents (AES-GCM encrypted, too)
-        if os.path.exists(dest):
+        if os.path.exists(dest) and not force:
             raise BaseException('destination file "%s" exists and won\'t get overwritten!'%dest)
         out = open(dest, 'wb')
         n = 0
@@ -164,7 +164,11 @@ class Vault:
             aes = AES.new(key, AES.MODE_GCM, nonce=nonce)
             aes.update(struct.pack('>Q', n)) # AAD: block number
             aes.update(hnonce) # AAD: header nonce
-            ds = aes.decrypt_and_verify(payload, tag)
+            try:
+                ds = aes.decrypt_and_verify(payload, tag)
+            except:
+                print("warning: block %d is damaged and won't be decrypted" % n)
+                ds = payload
             out.write(ds)
             n += 1
         f.close()
@@ -182,6 +186,7 @@ class Vault:
         "Print a list of contents of a virtual path"
         def _realsize(n):
             "Returns the decrypted file size"
+            if n == 68: return 0 # header only
             cb = (n + (32768+28-1)) // (32768+28) # number of encrypted blocks
             return n - 68 - (cb*28)
         for root, dirs, files in p.walk(virtualpath):
@@ -243,7 +248,7 @@ def aes_unwrap(kek, C):
             A = B[:8]
             R[i*8:i*8+8] = B[8:]
     if A != b'\xA6'*8:
-        raise BaseException('aes key unwrap failed. Bad password?')
+        raise BaseException('AES key unwrap failed. Bad password?')
     return R[8:]
 
 def aes_siv_encrypt(pk, hk, s, ad=b''):
@@ -353,10 +358,12 @@ if __name__ == '__main__':
         for it in extras[1:]:
             v.ls(it, recursive)
     elif extras[0] == 'decrypt':
+        force = '-f' in extras
+        if force: extras.remove('-f')
         if len(extras) != 3:
-            print('please use: decrypt <virtual_pathname_source> <real_pathname_destination>')
+            print('please use: decrypt [-f] <virtual_pathname_source> <real_pathname_destination>')
             sys.exit(1)
-        v.decryptFile(extras[1], extras[2])
+        v.decryptFile(extras[1], extras[2], force)
         print('done.')
     else:
         print('Unknown operation:', extras[0])
