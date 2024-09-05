@@ -12,7 +12,7 @@
 
 import argparse, getpass, hashlib, struct, base64
 import json, sys, io, os, operator
-import time, zipfile
+import time, zipfile, locale
 
 try:
     from Cryptodome.Cipher import AES
@@ -176,7 +176,30 @@ class Vault:
         # restore original last access and modification time
         st = p.stat(virtualpath)
         os.utime(dest, (st.st_atime, st.st_mtime))
+        return st.st_size
     
+    def decryptDir(p, virtualpath, dest, force=False):
+        if (virtualpath[0] != '/'):
+            raise BaseException('the vault path to decrypt must be absolute!')
+        real = p.getDirPath(virtualpath) # test existance
+        n=0
+        nn=0
+        total_bytes = 0
+        T0 = time.time()
+        for root, dirs, files in p.walk(virtualpath):
+            nn+=1
+            for it in files:
+                fn = os.path.join(root, it).replace('\\','/')
+                dn = os.path.join(dest, fn[1:]) # target pathname
+                bn = os.path.dirname(dn) # target base dir
+                if not os.path.exists(bn):
+                    os.makedirs(bn)
+                print(dn)
+                total_bytes += p.decryptFile(fn, dn, force)
+                n += 1
+        T1 = time.time()
+        print('decrypting %s bytes in %d files and %d directories took %d seconds' % (_fmt_size(total_bytes), n, nn, T1-T0))
+
     def stat(p, virtualpath):
         "Perform os.stat on a virtual pathname"
         target = p.getFilePath(virtualpath)
@@ -201,8 +224,8 @@ class Vault:
                 st = v.stat(full)
                 size = _realsize(st.st_size)
                 tot_size += size
-                print('%12d  %s  %s' %(size, time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
-            print('\n%d bytes in %d files and %d directories.' % (tot_size, len(files), len(dirs)))
+                print('%12s  %s  %s' %(_fmt_size(size), time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
+            print('\n%s bytes in %d files and %d directories.' % (_fmt_size(tot_size), len(files), len(dirs)))
             if not recursive: break
         
     def walk(p, virtualpath):
@@ -271,6 +294,18 @@ def d64(s, safe=0):
     if safe: D = base64.urlsafe_b64decode
     if type(s) != type(b''): pad = pad.decode()
     return D(s+pad)
+
+def _fmt_size(size):
+    "Internal function to format sizes"
+    if size >= 10**12:
+        sizes = {0:'B', 10:'K',20:'M',30:'G',40:'T',50:'E'}
+        k = 0
+        for k in sorted(sizes):
+            if (size // (1<<k)) < 10**6: break
+        size = locale.format_string('%.02f%s', (size/(1<<k), sizes[k]), grouping=1)
+    else:
+        size = locale.format_string('%d', size, grouping=1)
+    return size
 
 # If a DirectoryID file dir.c9r gets lost or corrupted, names in that directory can't be restored!
 def backupDirIds(vault_base, zip_backup):
@@ -363,8 +398,15 @@ if __name__ == '__main__':
         if len(extras) != 3:
             print('please use: decrypt [-f] <virtual_pathname_source> <real_pathname_destination>')
             sys.exit(1)
-        v.decryptFile(extras[1], extras[2], force)
-        print('done.')
+        isdir = 0
+        try:
+            v.getDirPath(extras[1])
+            isdir = 1
+        except: pass
+        if isdir: v.decryptDir(extras[1], extras[2], force)
+        else:
+            v.decryptFile(extras[1], extras[2], force)
+            print('done.')
     else:
         print('Unknown operation:', extras[0])
         sys.exit(1)
