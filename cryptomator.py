@@ -328,8 +328,8 @@ def backupDirIds(vault_base, zip_backup):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="List and decrypt files in a Cryptomator vault")
-    parser.add_argument('--print-keys', help="Print the raw master keys in ASCII85 (a85) or BASE64 (b64) format")
-    parser.add_argument('--master-keys', nargs=2, help="Primary and HMAC master keys in ASCII85 or BASE64 format")
+    parser.add_argument('--print-keys', help="Print the raw master keys in ASCII85 (a85) or BASE64 (b64) format", type=str, choices=['a85','b64'])
+    parser.add_argument('--master-keys', nargs=2, metavar=('PRIMARY_KEY', 'HMAC_KEY'), help="Primary and HMAC master keys in ASCII85 or BASE64 format")
     parser.add_argument('--password', help="Password to unlock master keys stored in config file")
     parser.add_argument('dirname', help="Location of the vault to open")
     args, extras = parser.parse_known_args()
