@@ -210,7 +210,7 @@ class Vault:
         def _realsize(n):
             "Returns the decrypted file size"
             if n == 68: return 0 # header only
-            cb = (n + (32768+28-1)) // (32768+28) # number of encrypted blocks
+            cb = (n - 68 + (32768+28-1)) // (32768+28) # number of encrypted blocks
             return n - 68 - (cb*28)
         for root, dirs, files in p.walk(virtualpath):
             print('\n  Directory of', root, '\n')
