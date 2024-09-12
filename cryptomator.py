@@ -12,7 +12,7 @@
 
 import argparse, getpass, hashlib, struct, base64
 import json, sys, io, os, operator
-import time, zipfile, locale
+import time, zipfile, locale, zlib
 
 try:
     from Cryptodome.Cipher import AES
@@ -324,14 +324,72 @@ def backupDirIds(vault_base, zip_backup):
             zip.write(s, it)
     zip.close()
 
+class Wordsencoder:
+    def __init__(p, dictionary):
+        "Initialize a dictionary with 4096 words"
+        words = open(dictionary).readlines()
+        words = [x for x in map(lambda x: x.strip('\n'), words)]
+        if len(words) != 4096: raise BaseException('A 4096 words list is required!')
+        p.dictionary = words
+
+    def words2bytes(p, words):
+        """Convert a list of words into a bytes sequence. Each word represents 
+        12 raw bits and must belong to the 4096-words reference dictionary """
+        n = 0
+        b = bytearray()
+        cb = 0
+        for w in words:
+            if w not in p.dictionary: raise BaseException('Word "%s" does not belong to dictionary' % w)
+            i = p.dictionary.index(w) # get word 12-bit index
+            n |= i # or with n
+            cb += 1
+            if cb == 2: # emit 3 bytes every 24 bits
+                b += n.to_bytes(3,'big')
+                n = 0
+                cb = 0
+                continue
+            n <<= 12 # shift by 12 bits
+        return b
+
+    def bytes2words(p, s):
+        """Convert a byte sequence (24-bit padded) into a words list. Each word represents 
+        12 raw bits and must belong to the 4096-words reference dictionary"""
+        if len(s) % 3: raise BaseException('Bytes sequence length must be 24-bit multiple!')
+        words = []
+        for g in [s[i:i+3] for i in range(0, len(s), 3)]: # group by 3 bytes
+            n = int.from_bytes(g, 'big')
+            i0 = n & 0xFFF
+            i1 = (n & 0xFFF000) >> 12
+            words += [p.dictionary[i1]]
+            words += [p.dictionary[i0]]
+        return words
+
+    def blob(p, pk, hk):
+        "Get a blob containing the Primary master key (32 bytes), the HMAC key (32 bytes) and a 16-bit checksum"
+        b = pk+hk
+        return b + p.crc(b)
+
+    def validate(p, s):
+        "Ensure the retrieved bytes sequence is a valid Cryptomator key"
+        if len(s) != 66:  raise BaseException('Decoded master keys must be 512 bits long with 16-bit checksum!' % w)
+        crc = zlib.crc32(s[:64])
+        if crc.to_bytes(4,'little')[:2] != s[64:]:
+            raise BaseException('Bad master keys checksum!')
+
+    def crc(p, s):
+        "Get the 16-bit checksum for the Cryptomator master keys"
+        if len(s) != 64:  raise BaseException('Decoded master keys must be 512 bits long!')
+        crc = zlib.crc32(s)
+        return crc.to_bytes(4,'little')[:2]
+
 
 
 if __name__ == '__main__':
     locale.setlocale(locale.LC_ALL, '')
 
     parser = argparse.ArgumentParser(description="List and decrypt files in a Cryptomator vault")
-    parser.add_argument('--print-keys', help="Print the raw master keys in ASCII85 (a85) or BASE64 (b64) format", type=str, choices=['a85','b64'])
-    parser.add_argument('--master-keys', nargs=2, metavar=('PRIMARY_KEY', 'HMAC_KEY'), help="Primary and HMAC master keys in ASCII85 or BASE64 format")
+    parser.add_argument('--print-keys', help="Print the raw master keys in ASCII85 (a85) or BASE64 (b64) format, or as a list of English words for Cryptomator", type=str, choices=['a85','b64','words'])
+    parser.add_argument('--master-keys', nargs=2, metavar=('PRIMARY_KEY', 'HMAC_KEY'), help="Primary and HMAC master keys in ASCII85 or BASE64 format, or - - to read words list from standard input")
     parser.add_argument('--password', help="Password to unlock master keys stored in config file")
     parser.add_argument('dirname', help="Location of the vault to open")
     args, extras = parser.parse_known_args()
@@ -340,32 +398,48 @@ if __name__ == '__main__':
         args.password = getpass.getpass()
 
     if args.master_keys:
-        def tryDecode(s):
-            e = 0
-            d = b''
-            try: d = base64.a85decode(s)
-            except: pass
-            if len(d) == 32: return d
-            try: d = base64.urlsafe_b64decode(s)
-            except: pass
-            if len(d) == 32: return d
-            raise BaseException('Could not decode master key "%s"'%s)
-        pk = tryDecode(args.master_keys[0])
-        hk = tryDecode(args.master_keys[1])
+        if args.master_keys[0] == '-':
+            words = input('Words list: ')
+            words = words.split()
+            if len(words) != 44: raise BaseException('Not enough words')
+            we = Wordsencoder(os.path.join(os.path.dirname(sys.argv[0]), '4096words_en.txt'))
+            b = we.words2bytes(words)
+            we.validate(b)
+            pk = b[:32]
+            hk = b[32:64]
+            print()
+        else:
+            def tryDecode(s):
+                e = 0
+                d = b''
+                try: d = base64.a85decode(s)
+                except: pass
+                if len(d) == 32: return d
+                try: d = base64.urlsafe_b64decode(s)
+                except: pass
+                if len(d) == 32: return d
+                raise BaseException('Could not decode master key "%s"'%s)
+            pk = tryDecode(args.master_keys[0])
+            hk = tryDecode(args.master_keys[1])
         v = Vault(args.dirname, pk=pk, hk=hk)
     else:
         v = Vault(args.dirname, args.password)
 
     if args.print_keys:
+        print('\n   * * *  WARNING !!!  * * *\n')
+        print('KEEP THESE KEYS TOP SECRET!\nFor recovering purposes only.\n')
+
         if args.print_keys == 'a85':
             encoder = base64.a85encode
         elif args.print_keys == 'b64':
             encoder = base64.urlsafe_b64encode
         else:
-            print('You must specify a85 or b64 encoding')
-            sys.exit(1)
-        print('\n   * * *  WARNING !!!  * * *\n')
-        print('KEEP THESE KEYS TOP SECRET!\nFor recovering purposes only.\n')
+            # initialize the words encoder with a dictionary in the same directory
+            # it contains 4096 English words
+            we = Wordsencoder(os.path.join(os.path.dirname(sys.argv[0]), '4096words_en.txt'))
+            words = we.bytes2words(we.blob(v.pk, v.hk))
+            print(' '.join(words))
+            sys.exit(0)
         print('Primary master key :', encoder(v.pk).decode())
         print('HMAC master key    :', encoder(v.hk).decode())
         sys.exit(0)
