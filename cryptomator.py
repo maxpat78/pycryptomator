@@ -12,22 +12,26 @@
 
 import argparse, getpass, hashlib, struct, base64
 import json, sys, io, os, operator
-import time, zipfile, locale, zlib
+import time, zipfile, locale, zlib, uuid
 
 try:
     from Cryptodome.Cipher import AES
     from Cryptodome.Hash import HMAC, SHA256
+    from Cryptodome.Random import get_random_bytes
 except ImportError:
     from Crypto.Cipher import AES
     from Crypto.Hash import HMAC, SHA256
+    from Crypto.Random import get_random_bytes
 
 
 class Vault:
     "Handles a Cryptomator vault"
     def __init__ (p, directory, password=None, pk=None, hk=None):
+        if not os.path.exists(directory):
+            raise BaseException('Vault directory does not exist!')
         if not os.path.isdir(directory):
-            raise BaseException('A directory pathname must be passed!')
-        p.base = directory
+            raise BaseException('Not a directory: '+directory)
+        p.base = directory # store vault base directory
         vcs = 'vault.cryptomator'
         config = os.path.join(p.base, vcs)
         try:
@@ -36,12 +40,9 @@ class Vault:
         except:
             raise BaseException('Unaccessible or invalid '+vcs)
         header, payload, sig = s.split(b'.')
-        #~ dheader = json.loads(base64.b64decode(header+b'==='))
-        #~ dpayload = json.loads(base64.b64decode(payload+b'==='))
         dheader = json.loads(d64(header))
         dpayload = json.loads(d64(payload))
         dsig = d64(sig, 1)
-        #~ print('header',dheader,'\n','payload',dpayload)
         assert dheader['typ'] == 'JWT'
         kid = dheader['kid']
         if not kid.startswith('masterkeyfile:'):
@@ -51,24 +52,53 @@ class Vault:
             raise BaseException('Invalid HMAC algorithms in '+vcs)
         assert dpayload['format'] == 8 # latest Vault format
         assert dpayload['cipherCombo'] == 'SIV_GCM' # AES-GCM with 96-bit IV and 128-bit tag (replaces AES-CTR+HMAC SHA-256)
-        mkcs = os.path.join(p.base, kid[14:])
-        master = json.load(open(mkcs))
-        #~ print('master', master)
-        if hk and pk:
-            p.pk = pk
-            p.hk = hk
-        else:
+        p.master_path = os.path.join(p.base, kid[14:]) # masterkey.cryptomator path
+        master = json.load(open(p.master_path))
+        if not hk or not pk:
             kek = hashlib.scrypt(password.encode('utf-8'),
                                        salt=d64(master['scryptSalt']),
                                        n=master['scryptCostParam'], r=master['scryptBlockSize'], p=1,
                                        maxmem=0x7fffffff, dklen=32)
-            primary_master_key = aes_unwrap(kek, d64(master['primaryMasterKey']))
-            hmac_master_key = aes_unwrap(kek, d64(master['hmacMasterKey']))
-            h = HMAC.new(primary_master_key+hmac_master_key, header+b'.'+payload, digestmod=SHA256)
-            if dsig != h.digest():
-                raise BaseException('Invalid HMAC for'+vcs)
-            p.pk = primary_master_key
-            p.hk = hmac_master_key
+            pk = aes_unwrap(kek, d64(master['primaryMasterKey']))
+            hk = aes_unwrap(kek, d64(master['hmacMasterKey']))
+            # check their combined HMAC-SHA-256 with both keys
+            h = HMAC.new(pk+hk, header+b'.'+payload, digestmod=SHA256)
+            if dsig != h.digest(): raise BaseException('Master keys HMAC do not match!')
+            # get the HMAC-SHA-256 of the version number (as 32-bit Big Endian) using the HMAC key only
+            h = HMAC.new(hk, int(master['version']).to_bytes(4, 'big'), digestmod=SHA256)
+            if master['versionMac'] != base64.b64encode(h.digest()).decode(): raise BaseException('Bad versionMac in masterkey file!')
+        p.master = master # store masterkey.cryptomator
+        p.pk = pk
+        p.hk = hk
+        # check for encrypted root presence
+        aes = AES.new(hk+pk, AES.MODE_SIV)
+        e, tag = aes.encrypt_and_digest(b'') # unencrypted root directory ID is always empty
+        # encrypted root directory ID SHA-1, Base32 encoded
+        edid = base64.b32encode(hashlib.sha1(tag+e).digest()).decode()
+        p.root = os.path.join(p.base, 'd', edid[:2], edid[2:]) # store encrypted root directory
+        if not os.path.exists(p.root):
+            raise BaseException("Fatal error, couldn't find vault's encrypted root directorty!")
+        p.dirid_cache = {} # cache retrieved directory IDs (60% speedup while listing !)
+
+    def change_password(p):
+        "Change the vault password, replacing the masterkey.cryptomator"
+        password = ask_new_password()
+        scryptSalt = get_random_bytes(8) # new random 64-bit salt
+        p.master['scryptSalt'] = base64.b64encode(scryptSalt).decode()
+        # calculate the new kek and wrap the master keys
+        kek = hashlib.scrypt(password.encode('utf-8'),
+                                   salt=scryptSalt,
+                                   n=p.master['scryptCostParam'], r=p.master['scryptBlockSize'], p=1,
+                                   maxmem=0x7fffffff, dklen=32)
+        pk = aes_wrap(kek, p.pk)
+        hk = aes_wrap(kek, p.hk)
+        # replace the keys in masterkey.cryptomator
+        p.master['primaryMasterKey'] = base64.b64encode(pk).decode()
+        p.master['hmacMasterKey'] = base64.b64encode(hk).decode()
+        # write the new file
+        s = json.dumps(p.master)
+        open(p.master_path,'w').write(s)
+        print('done.')
 
     def hashDirId(p, dirId):
         aes = AES.new(p.hk+p.pk, AES.MODE_SIV)
@@ -78,12 +108,13 @@ class Vault:
         return base64.b32encode(hashlib.sha1(dirIdE).digest()).decode()
 
     def encryptName(p, dirId, name):
-        "Encrypts a name contained in a given directory"
+        "Encrypt a name contained in a given directory"
         dirIdE = aes_siv_encrypt(p.pk, p.hk, name, dirId)
         # concatenated 128-bit digest and encrypted name
         return base64.urlsafe_b64encode(dirIdE) + b'.c9r'
 
     def decryptName(p, dirId, name):
+        "Decrypt a .c9r name"
         assert name[-4:] == b'.c9r'
         dname = d64(name[:-4], 1)
         return aes_siv_decrypt(p.pk, p.hk, dname, dirId)
@@ -94,14 +125,16 @@ class Vault:
         parts = virtualpath.split('/')
         for it in parts:
             if not it: continue
+            # build the encrypted dir name
             hdid = p.hashDirId(dirId.encode())
-            #~ print ('debug: hdid for', dirId, 'is', hdid)
             ename = p.encryptName(dirId.encode(), it.encode())
-            #~ print('debug: dir %s -> %s' % (it, ename))
             diridfn = os.path.join(p.base, 'd', hdid[:2], hdid[2:], ename.decode(), 'dir.c9r')
+            dirId = p.dirid_cache.get(diridfn) # try to retrieve dirId from cache
+            if dirId: continue
             if not os.path.exists(diridfn):
                 raise BaseException('could not find '+virtualpath)
             dirId = open(diridfn).read()
+            p.dirid_cache[diridfn] = dirId # cache directory id
         return dirId
 
     def getDirPath(p, virtualpath):
@@ -130,15 +163,6 @@ class Vault:
             raise BaseException(virtualpath+' is not a valid virtual file pathname')
         return target
         
-    def listDir(p, virtualpath):
-        "List directory contents of a virtual path inside the vault"
-        realpath = p.getDirPath(virtualpath)
-        dirId = p.getDirId(virtualpath)
-        for it in os.scandir(realpath):
-            if it.name == 'dirid.c9r': continue
-            dname = decryptName(p.pk, p.hk, dirId.encode(), it.name.encode())
-            print(dname)
-
     def decryptFile(p, virtualpath, dest, force=False):
         "Decrypt a file from a virtual pathname and puts it in real 'dest'"
         f = open(p.getFilePath(virtualpath), 'rb')
@@ -230,13 +254,11 @@ class Vault:
         
     def walk(p, virtualpath):
         "Traverse the virtual file system like os.walk"
-        #~ print('walking in', virtualpath)
         realpath = p.getDirPath(virtualpath)
         dirId = p.getDirId(virtualpath)
         root = virtualpath
         dirs = []
         files = []
-        #~ print('virtual', virtualpath, 'is real', realpath)
         for it in os.scandir(realpath):
             if it.name == 'dirid.c9r': continue
             isdir = it.is_dir()
@@ -273,6 +295,21 @@ def aes_unwrap(kek, C):
     if A != b'\xA6'*8:
         raise BaseException('AES key unwrap failed. Bad password?')
     return R[8:]
+
+def aes_wrap(kek, C):
+    "AES key wrapping according to RFC3394"
+    if len(C)%8:
+        raise BaseException("full 64 bits blocks required")
+    n = len(C)//8
+    A = bytearray(b'\xA6'*8)
+    R = bytearray(A+C)
+    for j in range(6):
+        for i in range(1, n+1):
+            B = AES.new(kek, AES.MODE_ECB).encrypt(A + R[i*8:i*8+8])
+            t = bytearray(struct.pack('>Q', n*j+i))
+            A = bytearray(map(operator.xor, B[:8], t))
+            R[i*8:i*8+8] = B[8:]
+    return A + R[8:]
 
 def aes_siv_encrypt(pk, hk, s, ad=b''):
     aes = AES.new(hk+pk, AES.MODE_SIV)
@@ -323,6 +360,75 @@ def backupDirIds(vault_base, zip_backup):
             s =  os.path.join(vault_base, it) # source file to backup with the plain text directory UUID
             zip.write(s, it)
     zip.close()
+
+def init_vault(vault_dir, password=None):
+    "Init a new V8 Vault in a pre-existant directory"
+    if not os.path.exists(vault_dir):
+        raise BaseException("Specified directory doesn't exist!")
+    if os.listdir(vault_dir):
+        raise BaseException("The directory is not empty!")
+
+    print('Creating new vault in "%s"' % vault_dir)
+
+    if not password:
+        password = ask_new_password()
+
+    # init the vault.cryptomator
+    pk = get_random_bytes(32) # new 256-bit Primary master key
+    hk = get_random_bytes(32) # new 256-bit HMAC master key
+    # vault.cryptomator model with default values
+    head = {'kid': 'masterkeyfile:masterkey.cryptomator', 'alg': 'HS256', 'typ': 'JWT'}
+    payl = {'jti': None, 'format': 8, 'cipherCombo': 'SIV_GCM', 'shorteningThreshold': 220}
+    payl['jti'] = str(uuid.uuid4()) # random UUID string identifying this vault
+    # jsonify & base64 encode vault.cryptomator structures
+    s = base64.b64encode(json.dumps(head).encode()) + b'.' + base64.b64encode(json.dumps(payl).encode())
+    # get their combined HMAC-SHA-256 with both keys
+    h = HMAC.new(pk+hk, s, digestmod=SHA256)
+    # write vault.cryptomator
+    open(os.path.join(vault_dir, 'vault.cryptomator'), 'wb').write(s + b'.' + base64.urlsafe_b64encode(h.digest()))
+
+    # masterkey.cryptomator model with default scrypt values
+    master = {'version': 999, 'scryptSalt': None, 'scryptCostParam': 32768, 'scryptBlockSize': 8,
+    'primaryMasterKey': None, 'hmacMasterKey': None, 'versionMac': None}
+    scryptSalt = get_random_bytes(8) # random 64-bit salt
+    master['scryptSalt'] = base64.b64encode(scryptSalt).decode()
+    # get the encryption key from password
+    kek = hashlib.scrypt(password.encode('utf-8'),
+                               salt=scryptSalt,
+                               n=master['scryptCostParam'], r=master['scryptBlockSize'], p=1,
+                               maxmem=0x7fffffff, dklen=32)
+    # wrap and encodes the master keys
+    master['primaryMasterKey'] = base64.b64encode(aes_wrap(kek, pk)).decode()
+    master['hmacMasterKey'] = base64.b64encode(aes_wrap(kek, hk)).decode()
+    # get the HMAC-SHA-256 of the version number (as 32-bit Big Endian) using the HMAC key only
+    h = HMAC.new(hk, int(master['version']).to_bytes(4, 'big'), digestmod=SHA256)
+    master['versionMac'] = base64.b64encode(h.digest()).decode()
+    # finally, write the new masterkey.cryptomator
+    open(os.path.join(vault_dir, 'masterkey.cryptomator'), 'w').write(json.dumps(master))
+
+    # init the encrypted root directory
+    os.mkdir(os.path.join(vault_dir, 'd')) # default base directory
+    aes = AES.new(hk+pk, AES.MODE_SIV)
+    e, tag = aes.encrypt_and_digest(b'') # unencrypted root directory ID is always empty
+    # encrypted root directory ID SHA-1, Base32 encoded
+    edid = base64.b32encode(hashlib.sha1(tag+e).digest()).decode()
+    # create the encrypted root directory (in vault_dir/d/<2-SHA1-chars>/<30-SHA1-chars>)
+    os.mkdir(os.path.join(vault_dir, 'd', edid[:2]))
+    os.mkdir(os.path.join(vault_dir, 'd', edid[:2], edid[2:]))
+    print('done.')
+    print ("It is strongly advised to open the new vault with --print-keys\nand annotate the master keys in a safe place!")
+    
+def ask_new_password():
+    "Ask for a new password and check it"
+    password = None
+    if not password:
+        check = 0
+        if check != 0: print('The passwords you typed do not match!')
+        while check != password:
+            password = getpass.getpass('Please type the new password: ')
+            check = getpass.getpass('Confirm the password: ')
+    return password
+
 
 class Wordsencoder:
     def __init__(p, dictionary):
@@ -387,12 +493,18 @@ class Wordsencoder:
 if __name__ == '__main__':
     locale.setlocale(locale.LC_ALL, '')
 
-    parser = argparse.ArgumentParser(description="List and decrypt files in a Cryptomator vault")
-    parser.add_argument('--print-keys', help="Print the raw master keys in ASCII85 (a85) or BASE64 (b64) format, or as a list of English words for Cryptomator", type=str, choices=['a85','b64','words'])
-    parser.add_argument('--master-keys', nargs=2, metavar=('PRIMARY_KEY', 'HMAC_KEY'), help="Primary and HMAC master keys in ASCII85 or BASE64 format, or - - to read words list from standard input")
+    parser = argparse.ArgumentParser(description="Access to a Cryptomator V8 vault")
+    parser.add_argument('--init', action="store_true", help="Initialize a new vault in an empty directory")
+    parser.add_argument('--print-keys', help="Print the raw master keys as a list of English words for Cryptomator (default), in ASCII85 (a85) or BASE64 (b64) format", type=str, choices=['a85','b64','words'], const='words', nargs='?')
+    parser.add_argument('--master-keys', nargs=2, metavar=('PRIMARY_KEY', 'HMAC_KEY'), help="Primary and HMAC master keys in ASCII85 or BASE64 format, or - - to read a words list from standard input")
     parser.add_argument('--password', help="Password to unlock master keys stored in config file")
-    parser.add_argument('dirname', help="Location of the vault to open")
+    parser.add_argument('--change-password', help="Change the password required to open the vault", action="store_true")
+    parser.add_argument('vault_name', help="Location of the existing Cryptomator V8 vault to open")
     args, extras = parser.parse_known_args()
+
+    if args.init:
+        init_vault(args.vault_name)
+        sys.exit(0)
 
     if not args.password and not args.master_keys:
         args.password = getpass.getpass()
@@ -421,9 +533,9 @@ if __name__ == '__main__':
                 raise BaseException('Could not decode master key "%s"'%s)
             pk = tryDecode(args.master_keys[0])
             hk = tryDecode(args.master_keys[1])
-        v = Vault(args.dirname, pk=pk, hk=hk)
+        v = Vault(args.vault_name, pk=pk, hk=hk)
     else:
-        v = Vault(args.dirname, args.password)
+        v = Vault(args.vault_name, args.password)
 
     if args.print_keys:
         print('\n   * * *  WARNING !!!  * * *\n')
@@ -442,6 +554,10 @@ if __name__ == '__main__':
             sys.exit(0)
         print('Primary master key :', encoder(v.pk).decode())
         print('HMAC master key    :', encoder(v.hk).decode())
+        sys.exit(0)
+
+    if args.change_password:
+        v.change_password()
         sys.exit(0)
 
     if not extras:
