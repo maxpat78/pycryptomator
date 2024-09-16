@@ -2,11 +2,11 @@
 
 A simple Python 3 script to access a Cryptomator V8 vault and carry on some useful operations.
 
+```
 usage: cryptomator.py [-h] [--init] [--print-keys [{a85,b64,words}]] [--master-keys PRIMARY_KEY HMAC_KEY]
                       [--password PASSWORD] [--change-password]
                       vault_name
 
-```
 Access to a Cryptomator V8 vault
 
 positional arguments:
