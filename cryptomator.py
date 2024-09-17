@@ -350,6 +350,7 @@ class Vault:
             if n == 68: return 0 # header only
             cb = (n - 68 + (32768+28-1)) // (32768+28) # number of encrypted blocks
             return n - 68 - (cb*28)
+        gtot_size, gtot_files, gtot_dirs = 0, 0, 1
         for root, dirs, files in p.walk(virtualpath):
             print('\n  Directory of', root, '\n')
             tot_size = 0
@@ -364,7 +365,12 @@ class Vault:
                 tot_size += size
                 print('%12s  %s  %s' %(_fmt_size(size), time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
             print('\n%s bytes in %d files and %d directories.' % (_fmt_size(tot_size), len(files), len(dirs)))
+            gtot_size += tot_size
+            gtot_files += len(files)
+            gtot_dirs += len(dirs)
             if not recursive: break
+        if recursive:
+            print('\n   Total files listed:\n%s bytes in %s files and %s directories.' % (_fmt_size(gtot_size), _fmt_size(gtot_files), _fmt_size(gtot_dirs)))
         
     def walk(p, virtualpath):
         "Traverse the virtual file system like os.walk"
