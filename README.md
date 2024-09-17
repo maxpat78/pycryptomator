@@ -30,6 +30,8 @@ After the `vauly_name`, you can specify some useful operations like:
 ```
 ls       list unecrypted vault contents (with size and time)
 decrypt  decrypt a file or directory from the vault's virtual filesystem into a given destination
+encrypt  encrypt a file or directory
+makedirs create a new directory/tree in the vault
 alias    show the real pathname linked to a virtual one
 backup   backup the Directory IDs (required to decrypt names) in a ZIP file
 ```
@@ -45,3 +47,4 @@ Functionality was tested in Windows 11 and Ubuntu 22.04 LTS Linux (under Windows
 It's pure Python 3, with pycryptodome addon.
 
 MIT licensed.
+Absolutely no warranty!
