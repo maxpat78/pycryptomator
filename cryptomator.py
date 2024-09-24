@@ -9,10 +9,12 @@
 """
 
 # Requires pycryptodome(x)
+# EOL is <LF> to make bash happy with #!
 
 import argparse, getpass, hashlib, struct, base64
 import json, sys, io, os, operator
 import time, zipfile, locale, zlib, uuid
+from os.path import *
 
 try:
     from Cryptodome.Cipher import AES
@@ -24,16 +26,53 @@ except ImportError:
     from Crypto.Random import get_random_bytes
 
 
+class PathInfo():
+    def __init__ (p):
+        p.pathname = ''     # virtual (vault's) pathname to query info for
+        p.longName = ''     # store the encrypted long name, if any
+        p.dirId = ''        # directory id to crypt names inside the directory (or this file name, if it is a file)
+        p.realPathName = '' # real (filesystem's) pathname derived crypting the virtual .pathname
+        p.realDir = ''      # real (filesystem's) contents directory associated to directory .pathname or containing file .pathname
+        p.hasSym = ''       # path to the symlink.c9r, if it is a symbolic link
+        p.isDir = 0         # whether it is (or points to) a directory
+        p.pointsTo = ''     # destination of the symbolic link, if any
+        p.exists = 0
+    
+    def __str__(p):
+        #~ return ".pathname=%s .dirId=%s .realPathName=%s .realDir=%s .hasSym=%s .isDir=%d .pointsTo=%s .exists=%d" % (p.pathname,p.dirId,p.realPathName,p.realDir,p.hasSym,p.isDir,p.pointsTo,p.exists)
+        if p.hasSym:
+            return '<PathInfo.Symlink (%s) "%s" -> "%s">' % (("File","Directory")[p.isDir], p.pathname, p.hasSym)
+        elif p.isDir:
+            return '<PathInfo.Directory "%s">' % (p.pathname)
+        else:
+            return '<PathInfo.File "%s">' % (p.pathname)
+
+    @property
+    def nameC9(p):
+        if not p.longName: return p.realPathName
+        return join(p.realPathName, 'name.c9s')
+
+    @property
+    def contentsC9(p):
+        if not p.longName or p.isDir: return p.realPathName
+        return join(p.realPathName, 'contents.c9r')
+
+    @property
+    def dirC9(p):
+        if not p.isDir: return ''
+        return join(p.realPathName, 'dir.c9r')
+
+
 class Vault:
     "Handles a Cryptomator vault"
     def __init__ (p, directory, password=None, pk=None, hk=None):
-        if not os.path.exists(directory):
+        if not exists(directory):
             raise BaseException('Vault directory does not exist!')
-        if not os.path.isdir(directory):
+        if not isdir(directory):
             raise BaseException('Not a directory: '+directory)
         p.base = directory # store vault base directory
         vcs = 'vault.cryptomator'
-        config = os.path.join(p.base, vcs)
+        config = join(p.base, vcs)
         try:
             s = open(config,'rb').read()
             assert len(s)
@@ -54,7 +93,7 @@ class Vault:
         assert dpayload['cipherCombo'] == 'SIV_GCM' # AES-GCM with 96-bit IV and 128-bit tag (replaces AES-CTR+HMAC SHA-256)
         p.shorteningThreshold = dpayload.get('shorteningThreshold')
         if not p.shorteningThreshold: p.shorteningThreshold = 220 # threshold to encode long names
-        p.master_path = os.path.join(p.base, kid[14:]) # masterkey.cryptomator path
+        p.master_path = join(p.base, kid[14:]) # masterkey.cryptomator path
         master = json.load(open(p.master_path))
         if not hk or not pk:
             kek = hashlib.scrypt(password.encode('utf-8'),
@@ -77,8 +116,8 @@ class Vault:
         e, tag = aes.encrypt_and_digest(b'') # unencrypted root directory ID is always empty
         # encrypted root directory ID SHA-1, Base32 encoded
         edid = base64.b32encode(hashlib.sha1(tag+e).digest()).decode()
-        p.root = os.path.join(p.base, 'd', edid[:2], edid[2:]) # store encrypted root directory
-        if not os.path.exists(p.root):
+        p.root = join(p.base, 'd', edid[:2], edid[2:]) # store encrypted root directory
+        if not exists(p.root):
             raise BaseException("Fatal error, couldn't find vault's encrypted root directorty!")
         p.dirid_cache = {} # cache retrieved directory IDs
 
@@ -104,8 +143,9 @@ class Vault:
 
     def hashDirId(p, dirId):
         "Get the Base32 encoded SHA-1 hash of an encrypted directory id as a string"
+        if type(dirId) == type(b''): dirId = dirId.decode()
         aes = AES.new(p.hk+p.pk, AES.MODE_SIV)
-        es, tag = aes.encrypt_and_digest(dirId)
+        es, tag = aes.encrypt_and_digest(dirId.encode())
         dirIdE = tag+es
         return base64.b32encode(hashlib.sha1(dirIdE).digest()).decode()
 
@@ -121,113 +161,98 @@ class Vault:
         dname = d64(name[:-4], 1)
         return aes_siv_decrypt(p.pk, p.hk, dname, dirId)
 
-    def getDirId(p, virtualpath, create=False):
-        "Get the Directory Id related to a virtual path inside the vault"
+    def getInfo(p, virtualpath):
+        "Query information about a vault's virtual path name and get a PathInfo object"
         dirId = '' # root id is null
+        info = PathInfo()
+        info.pathname = virtualpath
+        info.realDir = p.root
+        if virtualpath == '/':
+            info.isDir = 1
+            info.exists = 1
+            return info
         parts = virtualpath.split('/')
-        for it in parts:
-            if not it: continue
-            # build the encrypted dir name
-            hdid = p.hashDirId(dirId.encode())
-            ename = p.encryptName(dirId.encode(), it.encode())
+        i, j = -1, len(parts)-1
+        
+        while i < j:
+            i += 1
+            if not parts[i]: continue
+            # build the real dir path and the encrypted name
+            hdid = p.hashDirId(dirId)
+            ename = p.encryptName(dirId.encode(), parts[i].encode())
+            rp = join(p.base, 'd', hdid[:2], hdid[2:]) # real base directory
+            info.realDir = rp
+            isLong = 0
             if len(ename) > p.shorteningThreshold:
+                isLong = 1
                 # SHA-1 hash, Base64 encoded, of the encrypted long name
                 shortn = base64.urlsafe_b64encode(hashlib.sha1(ename).digest()).decode() + '.c9s'
-                c9sdir = os.path.join(p.base, 'd', hdid[:2], hdid[2:], shortn)
-                if create and not os.path.exists(c9sdir):
-                    # create the .c9s dir and store the long name in name.c9s
-                    os.mkdir(c9sdir)
-                    open(os.path.join(c9sdir, 'name.c9s'), 'wb').write(ename)
-                diridfn = os.path.join(c9sdir, 'dir.c9r')
+                c9s = join(rp, shortn, 'name.c9s') # contains a 'name.c9s' for both files and directories
+                diridfn = join(rp, shortn, 'dir.c9r')
             else:
-                diridfn = os.path.join(p.base, 'd', hdid[:2], hdid[2:], ename.decode(), 'dir.c9r')
-            dirId = p.dirid_cache.get(diridfn) # try to retrieve dirId from cache
-            if dirId: continue
-            if not os.path.exists(diridfn):
-                if not create: raise BaseException('could not find '+virtualpath)
-                # create the directory encrypted name inside its root
-                if not os.path.exists(os.path.dirname(diridfn)): os.makedirs(os.path.dirname(diridfn))
-                # create and store a random 36-bytes UUID string for it
-                # it is required to: 1) build the name of the associated "real" (=contents) directory;
-                # 2) crypt the names inside
-                dirId = str(uuid.uuid4()).encode()
-                open(diridfn,'wb').write(dirId)
-                # make the associated directory and store a backup copy of the dirId
-                hdid2 = p.hashDirId(dirId)
-                rp2 = os.path.join(p.base, 'd', hdid2[:2], hdid2[2:])
-                os.makedirs(rp2)
-                backup = os.path.join(rp2, 'dirid.c9r')
-                p.encryptFile(io.BytesIO(dirId), backup)
-                dirId = dirId.decode() # prepare a str for return
-            else:
-                dirId = open(diridfn).read()
-            p.dirid_cache[diridfn] = dirId # cache directory id
-        return dirId
+                diridfn = join(rp, ename.decode(), 'dir.c9r')
 
-    def getDirPath(p, virtualpath, create=False):
-        "Get the real pathname of a virtual directory path inside the vault"
-        dirId = p.getDirId(virtualpath, create)
-        hdid = p.hashDirId(dirId.encode())
-        rp = os.path.join(p.base, 'd', hdid[:2], hdid[2:])
-        if not os.path.isdir(rp):
-            raise BaseException('Could not find real directory for "%s" inside vault!'%rp)
-        return rp
-        
-    def getFilePath(p, virtualpath, create=False):
-        "Get the real pathname of a virtual file pathname inside the vault"
-        vbase = os.path.dirname(virtualpath)
-        vname = os.path.basename(virtualpath)
-        realbase = p.getDirPath(vbase)
-        if vname == 'dirid.c9r': # special backup directory id file
-            return os.path.join(realbase, 'dirid.c9r')
-        dirId = p.getDirId(vbase)
-        ename = p.encryptName(dirId.encode(), vname.encode()).decode()
-        if len(ename) > p.shorteningThreshold:
-            # SHA-1 hash, Base64 encoded, of the encrypted long name
-            shortn = base64.urlsafe_b64encode(hashlib.sha1(ename.encode()).digest()).decode() + '.c9s'
-            contents_c9r = os.path.join(realbase, shortn, 'contents.c9r')
-            if create:
-                os.mkdir(os.path.dirname(contents_c9r))
-                open(contents_c9r,'w').close()
-                namef = os.path.join(realbase, shortn, 'name.c9s')
-                open(namef,'w').write(ename)
-                return contents_c9r
-            else:
-                ename = contents_c9r[len(realbase)+1:]
-                if not os.path.exists(contents_c9r) and os.path.exists(os.path.join(realbase, shortn, 'dir.c9r')): # if long dir name
-                    ename = shortn
-        target = os.path.join(realbase, ename)
-        if not create and not os.path.exists(target):
-            raise BaseException(virtualpath+' is not a valid virtual file pathname')
-        return target
-        
-    def encryptFile(p, src, virtualpath, force=False):
-        "Encrypt a 'src' file into a pre-existant vault's virtual pathname (or a file-like object into a real path)"
-        if hasattr(src, 'read'): # if it's file
-            f = src
-        else:
-            if not os.path.exists(src):
-                raise BaseException('Source file does not exist: '+src)
-            f = open(src, 'rb')
-        if not os.path.basename(virtualpath).endswith('dirid.c9r'):
-            if not p.getDirPath(os.path.dirname(virtualpath)):
-                raise BaseException('Target directory does not exist: '+os.path.dirname(virtualpath))
-            rp = p.getFilePath(virtualpath, 1)
-        else:
-            rp = virtualpath
-        out = open(rp,'wb')
+            dirId = p.dirid_cache.get(diridfn, '') # try to retrieve dirId from cache
+            if not dirId and exists(diridfn):
+                dirId = open(diridfn).read()
+                p.dirid_cache[diridfn] = dirId # cache directory id
+            info.dirId = dirId
+            info.realPathName = dirname(diridfn)
+            if i == j:
+                info.realPathName = dirname(diridfn)
+                info.exists = exists(info.realPathName)
+                if exists(diridfn):
+                    info.isDir = 1
+                    hdid = p.hashDirId(dirId)
+                    rp = join(p.base, 'd', hdid[:2], hdid[2:])
+                    info.realDir = rp
+                    info.exists = 1
+                info.dirId = dirId
+                if isLong:
+                    info.longName = ename
+                sl = join(dirname(diridfn), 'symlink.c9r')
+                if exists(sl):
+                    info.hasSym = sl
+                    resolved = p.resolveSymlink(virtualpath, sl)
+                    info.pointsTo = resolved[0]
+                    try:
+                        iinfo = p.getInfo(resolved[0])
+                        info.dirId = iinfo.dirId
+                        info.isDir = iinfo.isDir
+                        info.realDir = iinfo.realDir
+                        #~ info.exists = iinfo.exists # .exists refers to link file, not target
+                    except:
+                        pass
+            if not exists(info.realPathName):
+                info.pathname = join('/', *parts[:i+1]) # store the first non-existant part
+                return info
+        return info
+
+    def resolveSymlink(p, virtualpath, symlink):
+        src = open(symlink, 'rb')
+        sl = io.BytesIO()
+        Vault._decryptf(p.pk, src, sl)
+        sl.seek(0)
+        symlink = target = sl.read().decode()
+        if target[0] != '/':
+            # recreate and normalize the path relative to virtualpath
+            target = normpath(join(dirname(virtualpath), target)).replace('\\','/')
+        return (target, symlink)
+
+    def _encryptf(K, src, dst):
+        "Raw encrypt with AES key 'K', from 'src' stream to 'dst' stream"
         hnonce = get_random_bytes(12) # random 96-bit header nonce
         key = get_random_bytes(32) # random 256-bit content encryption key
         payload = bytearray(b'\xFF'*8 + key)
-        epayload, tag = AES.new(p.pk, AES.MODE_GCM, nonce=hnonce).encrypt_and_digest(payload)
+        epayload, tag = AES.new(K, AES.MODE_GCM, nonce=hnonce).encrypt_and_digest(payload)
         # write 68 byte header: nonce, encrypted key and tag
-        out.write(hnonce)
-        out.write(epayload)
-        out.write(tag)
+        dst.write(hnonce)
+        dst.write(epayload)
+        dst.write(tag)
         # encrypt single blocks
         n = 0
         while True:
-            s = f.read(32768) # a plaintext block is at most 32K
+            s = src.read(32768) # a plaintext block is at most 32K
             if not s: break
             nonce = get_random_bytes(12) # random 96-bit nonce
             aes = AES.new(key, AES.MODE_GCM, nonce=nonce)
@@ -235,10 +260,25 @@ class Vault:
             aes.update(hnonce) # AAD: header nonce
             es, tag = aes.encrypt_and_digest(s)
             # write block nonce, payload and tag
-            out.write(nonce)
-            out.write(es)
-            out.write(tag)
+            dst.write(nonce)
+            dst.write(es)
+            dst.write(tag)
             n += 1
+
+    def encryptFile(p, src, virtualpath, force=False):
+        "Encrypt a 'src' file into a pre-existant vault's virtual directory (or a file-like object into a real path)"
+        if hasattr(src, 'read'): # if it's file
+            f = src
+        else:
+            if not exists(src):
+                raise BaseException('Source file does not exist: '+src)
+            f = open(src, 'rb')
+        if not basename(virtualpath).endswith('dirid.c9r'):
+            rp = p.makefile(virtualpath)
+        else:
+            rp = virtualpath
+        out = open(rp,'wb')
+        Vault._encryptf(p.pk, f, out)
         cb = out.tell()
         out.close()
         f.close()
@@ -250,7 +290,7 @@ class Vault:
     def encryptDir(p, src, virtualpath, force=False):
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path must be absolute!')
-        real = p.getDirPath(virtualpath, 1)
+        real = p.makedirs(virtualpath)
         n=0
         nn=0
         total_bytes = 0
@@ -258,38 +298,30 @@ class Vault:
         for root, dirs, files in os.walk(src):
             nn+=1
             for it in files:
-                fn = os.path.join(root, it).replace('\\','/')
-                dn = os.path.join(real, fn[len(src):]) # target pathname
-                p.makedirs(os.path.dirname(dn))
+                fn = join(root, it)
+                dn = join(virtualpath, fn[len(src)+1:]) # target pathname
+                p.makedirs(dirname(dn))
                 print(dn)
                 total_bytes += p.encryptFile(fn, dn, force)
                 n += 1
         T1 = time.time()
         print('encrypting %s bytes in %d files and %d directories took %d seconds' % (_fmt_size(total_bytes), n, nn, T1-T0))
 
-    def decryptFile(p, virtualpath, dest, force=False):
-        "Decrypt a file from a virtual pathname and puts it in 'dest' (a real pathname or file-like object)"
-        f = open(p.getFilePath(virtualpath), 'rb')
-        
+    def _decryptf(K, src, dst):
+        "Raw decrypt with AES key 'K', from 'src' stream to 'dst' stream"
         # Get encrypted header
-        h = f.read(68)
+        h = src.read(68)
         hnonce, hpayload, htag = h[:12], h[12:-16], h[-16:]
 
         # Get content key
-        dh = AES.new(p.pk, AES.MODE_GCM, nonce=hnonce).decrypt_and_verify(hpayload, htag)
+        dh = AES.new(K, AES.MODE_GCM, nonce=hnonce).decrypt_and_verify(hpayload, htag)
         assert dh[:8] == b'\xFF'*8
         key = dh[8:] # 256-bit AES key
         
         # Process contents (AES-GCM encrypted, too)
-        if hasattr(dest, 'write'): # if it's file
-            out = dest
-        else:
-            if os.path.exists(dest) and not force:
-                raise BaseException('destination file "%s" exists and won\'t get overwritten!'%dest)
-            out = open(dest, 'wb')
         n = 0
         while True:
-            s = f.read(32768+28) # an encrypted block is at most 32K + 28 bytes
+            s = src.read(32768+28) # an encrypted block is at most 32K + 28 bytes
             if not s: break
             nonce, payload, tag = s[:12], s[12:-16], s[-16:]
             aes = AES.new(key, AES.MODE_GCM, nonce=nonce)
@@ -300,12 +332,32 @@ class Vault:
             except:
                 print("warning: block %d is damaged and won't be decrypted" % n)
                 ds = payload
-            out.write(ds)
+            dst.write(ds)
             n += 1
+
+    def decryptFile(p, virtualpath, dest, force=False):
+        "Decrypt a file from a virtual pathname and puts it in 'dest' (a real pathname or file-like object)"
+        info = p.getInfo(virtualpath)
+        while info.pointsTo:
+            info = p.getInfo(info.pointsTo)
+        rp = info.realPathName
+        f = open(rp, 'rb')
+        if hasattr(dest, 'write'): # if it's file
+            out = dest
+        else:
+            if (dest == '-'):
+                out = sys.stdout.buffer
+            else:
+                if exists(dest) and not force:
+                    raise BaseException('destination file "%s" exists and won\'t get overwritten!'%dest)
+                out = open(dest, 'wb')
+
+        Vault._decryptf(p.pk, f, out)
+        
         f.close()
-        out.close()
+        if dest != '-': out.close()
         st = p.stat(virtualpath)
-        if not hasattr(dest, 'write'):
+        if dest != '-' and not hasattr(dest, 'write'):
             # restore original last access and modification time
             os.utime(dest, (st.st_atime, st.st_mtime))
         return st.st_size
@@ -313,7 +365,9 @@ class Vault:
     def decryptDir(p, virtualpath, dest, force=False):
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path to decrypt must be absolute!')
-        real = p.getDirPath(virtualpath) # test existance
+        x = p.getInfo(virtualpath)
+        if not x.exists:
+            raise BaseException(virtualpath + ' does not exist!')
         n=0
         nn=0
         total_bytes = 0
@@ -321,10 +375,10 @@ class Vault:
         for root, dirs, files in p.walk(virtualpath):
             nn+=1
             for it in files:
-                fn = os.path.join(root, it).replace('\\','/')
-                dn = os.path.join(dest, fn[1:]) # target pathname
-                bn = os.path.dirname(dn) # target base dir
-                if not os.path.exists(bn):
+                fn = join(root, it)
+                dn = join(dest, fn[1:]) # target pathname
+                bn = dirname(dn) # target base dir
+                if not exists(bn):
                     os.makedirs(bn)
                 print(dn)
                 total_bytes += p.decryptFile(fn, dn, force)
@@ -334,14 +388,134 @@ class Vault:
 
     def stat(p, virtualpath):
         "Perform os.stat on a virtual pathname"
-        target = p.getFilePath(virtualpath)
-        return os.stat(target)
+        x = p.getInfo(virtualpath)
+        return os.stat(x.contentsC9)
 
+    def _mkdir(p, realpath):
+        "Initialize a new directory"
+        # make the encrypted directory
+        os.mkdir(realpath)
+        # assign a random directory id
+        dirId = str(uuid.uuid4()).encode()
+        open(join(realpath,'dir.c9r'),'wb').write(dirId)
+        # make the associated contents directory and store a backup copy of the dir id
+        hdid = p.hashDirId(dirId)
+        rp = join(p.base, 'd', hdid[:2], hdid[2:])
+        os.makedirs(rp)
+        backup = join(rp, 'dirid.c9r')
+        p.encryptFile(io.BytesIO(dirId), backup)
+        
     def makedirs(p, virtualpath):
-        "Creates a new directory or tree in the vault"
+        "Create a new directory or tree in the vault"
         if (virtualpath[0] != '/'):
-            raise BaseException('the vault path to decrypt must be absolute!')
-        p.getDirPath(virtualpath, 1) # with create=True, intermediate directories are created on the fly
+            raise BaseException('the vault path to the directory to create must be absolute!')
+        while 1:
+            x = v.getInfo(virtualpath)
+            if x.exists: break
+            v._mkdir(x.realPathName)
+            if x.longName: open(x.nameC9,'wb').write(x.longName)
+        return x.realDir
+
+    def makefile(p, virtualpath):
+        "Create an empty file and, eventually, its intermediate directories"
+        p.makedirs(dirname(virtualpath)) # ensure base path exists
+        x = p.getInfo(virtualpath)
+        if x.longName:
+            dn = dirname(x.nameC9)
+            if not exists(dn): os.makedirs(dn)
+            open(x.nameC9,'wb').write(x.longName)
+        open(x.contentsC9,'w').close()
+        return x.contentsC9
+
+    def remove(p, virtualpath):
+        "Delete a file or symlink"
+        x = p.getInfo(virtualpath)
+        if not x.exists:
+            print('rm: %s: no such file' % virtualpath)
+            return
+        if x.isDir and not x.hasSym:
+            print('rm: %s: is a directory' % virtualpath)
+            return
+        if x.hasSym:
+            # remove symlink.c9r and its parent
+            os.remove(x.hasSym)
+            os.rmdir(x.realPathName)
+        if x.longName:
+            # remove name.c9s, contents.c9r and their .c9s parent
+            os.remove(x.nameC9)
+            os.remove(x.contentsC9)
+            os.rmdir(x.realPathName)
+        else:
+            # remove the .c9r file
+            if not x.hasSym: os.remove(x.realPathName)
+
+    def rmdir(p, virtualpath):
+        "Delete an empty directory"
+        x = p.getInfo(virtualpath)
+        if not x.exists:
+            print('rmdir: %s: no such directory' % virtualpath)
+            return
+        if not x.isDir:
+            print('rmdir: %s: is not a directory' % virtualpath)
+            return
+        files = os.listdir(x.realDir)
+        if 'dirid.c9r' in files:
+            files.remove('dirid.c9r')
+        if len(files):
+            print('rmdir: %s: directory is not empty' % virtualpath)
+            return
+        c9r = join(x.realDir,'dirid.c9r') # dirid backup
+        if exists(c9r): os.remove(c9r)
+        os.rmdir(x.realDir) # 30-chars part
+        try:
+            os.rmdir(dirname(x.realDir)) # 2-chars part
+        except OSError:
+            print("Could not remove %s while rmdir'ing %s" %(dirname(x.realDir), virtualpath))
+            print("os.listdir returned", os.listdir(dirname(x.realDir)))
+            # RemoveDirectory "marks a directory for deletion *on close*"
+            print("NOTE: on Windows this could be due to caching problems, and NOT affects operation success!")
+        if x.longName:
+            # remove name.c9s, dir.c9r and their .c9s parent
+            os.remove(x.nameC9)
+            os.remove(x.dirC9)
+            os.rmdir(x.realPathName)
+        else:
+            os.remove(x.dirC9)
+            os.rmdir(x.realPathName)
+
+    def rmtree(p, virtualpath):
+        "Delete a full virtual directory tree"
+        x = p.getInfo(virtualpath)
+        if not x.exists:
+            print('rmtree: %s: no such directory' % virtualpath)
+            return
+        if not x.isDir:
+            print('rmtree: %s: is not a directory' % virtualpath)
+            return
+        # Delete all files, first
+        ff, dd = 0, 1
+        for root, dirs, files in p.walk(virtualpath):
+            for it in files:
+                fn = join(root, it)
+                p.remove(fn)
+                ff += 1
+        # Then delete all directories, in bottom-up order
+        for root, dirs, files in reversed(list(p.walk(virtualpath))):
+            for it in dirs:
+                dn = join(root, it)
+                p.rmdir(dn)
+                dd += 1
+        # Finally, delete the empty base directory
+        p.rmdir(virtualpath)
+        print ('rmtree: deleted %d files in %d directories' % (ff,dd))
+            
+    def ln(p, target, symlink):
+        "Create a symbolic link"
+        a = p.getInfo(symlink)
+        if not exists(a.realPathName): os.mkdir(a.realPathName)
+        out = open(join(a.realPathName, 'symlink.c9r'), 'wb')
+        Vault._encryptf(p.pk, io.BytesIO(target.encode()), out) # does not check target existance
+        out.close()
 
     def ls(p, virtualpath, recursive=False):
         "Print a list of contents of a virtual path"
@@ -349,21 +523,35 @@ class Vault:
             "Returns the decrypted file size"
             if n == 68: return 0 # header only
             cb = (n - 68 + (32768+28-1)) // (32768+28) # number of encrypted blocks
-            return n - 68 - (cb*28)
-        gtot_size, gtot_files, gtot_dirs = 0, 0, 1
+            size = n - 68 - (cb*28)
+            if size < 0: size = 0 #symlinks
+            return size
+
+        info = p.getInfo(virtualpath)
+        if not info.isDir:
+            print(virtualpath, 'is not a directory!')
+            sys.exit(1)
+        if info.pointsTo:
+            print(virtualpath, 'points to', info.pointsTo)
+            virtualpath = info.pointsTo
+        gtot_size, gtot_files, gtot_dirs = 0, 0, 0
         for root, dirs, files in p.walk(virtualpath):
             print('\n  Directory of', root, '\n')
             tot_size = 0
             for it in dirs:
-                full = os.path.join(root, it).replace('\\','/')
+                full = join(root, it)
                 st = v.stat(full)
                 print('%12s  %s  %s' %('<DIR>', time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
             for it in files:
-                full = os.path.join(root, it).replace('\\','/')
+                full = join(root, it)
                 st = v.stat(full)
                 size = _realsize(st.st_size)
                 tot_size += size
-                print('%12s  %s  %s' %(_fmt_size(size), time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
+                info = p.getInfo(full)
+                if info.hasSym:
+                    print('%12s  %s  %s [--> %s]' %('<SYM>', time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it, info.pointsTo))
+                else:
+                    print('%12s  %s  %s' %(_fmt_size(size), time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
             print('\n%s bytes in %d files and %d directories.' % (_fmt_size(tot_size), len(files), len(dirs)))
             gtot_size += tot_size
             gtot_files += len(files)
@@ -371,29 +559,36 @@ class Vault:
             if not recursive: break
         if recursive:
             print('\n   Total files listed:\n%s bytes in %s files and %s directories.' % (_fmt_size(gtot_size), _fmt_size(gtot_files), _fmt_size(gtot_dirs)))
-        
+
+    # os.walk by default does not follow dir links
     def walk(p, virtualpath):
         "Traverse the virtual file system like os.walk"
-        realpath = p.getDirPath(virtualpath)
-        dirId = p.getDirId(virtualpath)
+        x = p.getInfo(virtualpath)
+        realpath = x.realDir
+        dirId = x.dirId
         root = virtualpath
         dirs = []
         files = []
         for it in os.scandir(realpath):
             if it.name == 'dirid.c9r': continue
-            isdir = it.is_dir()
-            if it.name.endswith('.c9s'):  # deflated long name
+            is_dir = it.is_dir()
+            if it.name.endswith('.c9s'): # deflated long name
                 # A c9s dir contains the original encrypted long name (name.c9s) and encrypted contents (contents.c9r)
-                ename = open(os.path.join(realpath, it.name, 'name.c9s')).read()
+                ename = open(join(realpath, it.name, 'name.c9s')).read()
                 dname = p.decryptName(dirId.encode(), ename.encode()).decode()
-                if os.path.exists(os.path.join(realpath, it.name, 'contents.c9r')): isdir = False
+                if exists(join(realpath, it.name, 'contents.c9r')): is_dir = False
             else:
                 dname = p.decryptName(dirId.encode(), it.name.encode()).decode()
-            if isdir: dirs += [dname]
+            sl = join(realpath, it.name, 'symlink.c9r')
+            if is_dir and exists(sl):
+                # Decrypt and look at symbolic link target
+                resolved = p.resolveSymlink(join(root, dname), sl)
+                is_dir = False
+            if is_dir: dirs += [dname]
             else: files += [dname]
         yield root, dirs, files
         for it in dirs:
-            subdir = os.path.join(root, it).replace('\\','/')
+            subdir = join(root, it)
             yield from p.walk(subdir)
 
 # AES utility functions
@@ -464,27 +659,29 @@ def _fmt_size(size):
         size = locale.format_string('%d', size, grouping=1)
     return size
 
+def join(*args): return os.path.join(*args).replace('\\','/')
+
 # If a directory id file dir.c9r gets lost or corrupted, and there is no dirid.c9r
 # backup in the associated contents directory, names in that directory can't be restored!
 def backupDirIds(vault_base, zip_backup):
     "Archive in a ZIP file all the DirectoryIDs with their encrypted tree, for backup purposes"
-    if not os.path.exists(vault_base) or \
-    not os.path.isdir(vault_base) or \
-    not os.path.exists(os.path.join(vault_base,'vault.cryptomator')):
+    if not exists(vault_base) or \
+    not isdir(vault_base) or \
+    not exists(join(vault_base,'vault.cryptomator')):
         raise BaseException(vault_base+' is not a valid Cryptomator vault directory!')
     zip = zipfile.ZipFile(zip_backup, 'w', zipfile.ZIP_DEFLATED)
     n = len(vault_base)
     df = 'dir.c9r'
     for root, dirs, files in os.walk(vault_base):
         if df in files:
-            it = os.path.join(root[n+1:], df) # ZIP item name (relative name)
-            s =  os.path.join(vault_base, it) # source file to backup with the plain text directory UUID
+            it = join(root[n+1:], df) # ZIP item name (relative name)
+            s =  join(vault_base, it) # source file to backup with the plain text directory UUID
             zip.write(s, it)
     zip.close()
 
 def init_vault(vault_dir, password=None):
     "Init a new V8 Vault in a pre-existant directory"
-    if not os.path.exists(vault_dir):
+    if not exists(vault_dir):
         raise BaseException("Specified directory doesn't exist!")
     if os.listdir(vault_dir):
         raise BaseException("The directory is not empty!")
@@ -506,7 +703,7 @@ def init_vault(vault_dir, password=None):
     # get their combined HMAC-SHA-256 with both keys
     h = HMAC.new(pk+hk, s, digestmod=SHA256)
     # write vault.cryptomator
-    open(os.path.join(vault_dir, 'vault.cryptomator'), 'wb').write(s + b'.' + base64.urlsafe_b64encode(h.digest()))
+    open(join(vault_dir, 'vault.cryptomator'), 'wb').write(s + b'.' + base64.urlsafe_b64encode(h.digest()))
 
     # masterkey.cryptomator model with default scrypt values
     master = {'version': 999, 'scryptSalt': None, 'scryptCostParam': 32768, 'scryptBlockSize': 8,
@@ -525,23 +722,23 @@ def init_vault(vault_dir, password=None):
     h = HMAC.new(hk, int(master['version']).to_bytes(4, 'big'), digestmod=SHA256)
     master['versionMac'] = base64.b64encode(h.digest()).decode()
     # finally, write the new masterkey.cryptomator
-    open(os.path.join(vault_dir, 'masterkey.cryptomator'), 'w').write(json.dumps(master))
+    open(join(vault_dir, 'masterkey.cryptomator'), 'w').write(json.dumps(master))
 
     # init the encrypted root directory
-    os.mkdir(os.path.join(vault_dir, 'd')) # default base directory
+    os.mkdir(join(vault_dir, 'd')) # default base directory
     aes = AES.new(hk+pk, AES.MODE_SIV)
     e, tag = aes.encrypt_and_digest(b'') # unencrypted root directory ID is always empty
     # encrypted root directory ID SHA-1, Base32 encoded
     edid = base64.b32encode(hashlib.sha1(tag+e).digest()).decode()
     # create the encrypted root directory (in vault_dir/d/<2-SHA1-chars>/<30-SHA1-chars>)
-    os.mkdir(os.path.join(vault_dir, 'd', edid[:2]))
-    os.mkdir(os.path.join(vault_dir, 'd', edid[:2], edid[2:]))
+    os.mkdir(join(vault_dir, 'd', edid[:2]))
+    os.mkdir(join(vault_dir, 'd', edid[:2], edid[2:]))
 
     # create a backup dirid.c9r (=empty encrypted file). See details in encryptFile.
     hnonce = get_random_bytes(12)
     payload = bytearray(b'\xFF'*8 + get_random_bytes(32))
     epayload, tag = AES.new(pk, AES.MODE_GCM, nonce=hnonce).encrypt_and_digest(payload)
-    open(os.path.join(vault_dir, 'd', edid[:2], edid[2:], 'dirid.c9r'), 'wb').write(hnonce+payload+tag)
+    open(join(vault_dir, 'd', edid[:2], edid[2:], 'dirid.c9r'), 'wb').write(hnonce+payload+tag)
     print('done.')
     print ("It is strongly advised to open the new vault with --print-keys\nand annotate the master keys in a safe place!")
     
@@ -641,7 +838,7 @@ if __name__ == '__main__':
             words = input('Words list: ')
             words = words.split()
             if len(words) != 44: raise BaseException('Not enough words')
-            we = Wordsencoder(os.path.join(os.path.dirname(sys.argv[0]), '4096words_en.txt'))
+            we = Wordsencoder(join(dirname(sys.argv[0]), '4096words_en.txt'))
             b = we.words2bytes(words)
             we.validate(b)
             pk = b[:32]
@@ -675,7 +872,7 @@ if __name__ == '__main__':
         else:
             # initialize the words encoder with a dictionary in the same directory
             # it contains 4096 English words
-            we = Wordsencoder(os.path.join(os.path.dirname(sys.argv[0]), '4096words_en.txt'))
+            we = Wordsencoder(join(dirname(sys.argv[0]), '4096words_en.txt'))
             words = we.bytes2words(we.blob(v.pk, v.hk))
             print(' '.join(words))
             sys.exit(0)
@@ -688,14 +885,16 @@ if __name__ == '__main__':
         sys.exit(0)
 
     if not extras:
-        print('An operation must be specified among alias, backup, decrypt, encrypt, ls, makedirs')
+        print('An operation must be specified among alias, backup, decrypt, encrypt, ln, ls, makedirs, rm, rmdir, rmtree.')
         sys.exit(1)
 
     if extras[0] == 'alias':
         if len(extras) == 1:
             print('please use: alias <virtual_pathname>')
             sys.exit(1)
-        print('"%s" is the real pathname for %s' % (v.getFilePath(extras[1]), extras[1]))
+        x = v.getInfo(extras[1])
+        #~ print('"%s" is the real pathname for %s' % (v.getFilePath(extras[1]), extras[1]))
+        print('"%s" is the real pathname for %s' % (x.nameC9, extras[1]))
     elif extras[0] == 'backup':
         if len(extras) == 1:
             print('please use: backup <ZIP archive>')
@@ -706,9 +905,8 @@ if __name__ == '__main__':
         recursive = '-r' in extras
         if recursive: extras.remove('-r')
         if len(extras) == 1:
-            print('please use: ls [-r] <virtual_path1> [...<virtual_pathN>]')
-            print('(hint: try "ls /" at first)')
-            sys.exit(1)
+            #~ print('please use: ls [-r] <virtual_path1> [...<virtual_pathN>]')
+            extras += ['/'] # implicit argument
         for it in extras[1:]:
             v.ls(it, recursive)
     elif extras[0] == 'decrypt': # decrypt files or directories
@@ -717,29 +915,52 @@ if __name__ == '__main__':
         if len(extras) != 3:
             print('please use: decrypt [-f] <virtual_pathname_source> <real_pathname_destination>')
             sys.exit(1)
-        isdir = 0
-        try:
-            v.getDirPath(extras[1])
-            isdir = 1
-        except: pass
-        if isdir: v.decryptDir(extras[1], extras[2], force)
+        is_dir = v.getInfo(extras[1]).isDir
+        if is_dir: v.decryptDir(extras[1], extras[2], force)
         else:
             v.decryptFile(extras[1], extras[2], force)
+            if extras[2] == '-': print()
             print('done.')
     elif extras[0] == 'makedirs':
         if len(extras) != 2:
             print('please use: makedirs <virtual_pathname>') # intermediate directories get created
             sys.exit(1)
         v.makedirs(extras[1])
+    elif extras[0] == 'ln':
+        if len(extras) != 3:
+            print('please use: ln <target_virtual_pathname> <symbolic_link_virtual_pathname>')
+            sys.exit(1)
+        v.ln(extras[1], extras[2])
+        print('done.')
     elif extras[0] == 'encrypt': # encrypt files or directories
         if len(extras) != 3:
-            print('please use: encrypt <real_pathname_destination> <virtual_pathname_destination>')
+            print('please use: encrypt <real_pathname_source> <virtual_pathname_destination>')
             sys.exit(1)
-        if os.path.isdir(extras[1]):
+        if isdir(extras[1]):
             v.encryptDir(extras[1], extras[2])
         else:
             v.encryptFile(extras[1], extras[2])
             print('done.')
+    elif extras[0] == 'rm':
+        if len(extras) == 1:
+            print('please use: rm <file1> [<file2...fileN]')
+            sys.exit(1)
+        for it in extras[1:]:
+            v.remove(it)
+    elif extras[0] == 'rmdir':
+        if len(extras) == 1:
+            print('please use: rmdir <dir1> [<dir2...dirN]')
+            sys.exit(1)
+        for it in extras[1:]:
+            v.rmdir(it)
+    elif extras[0] == 'rmtree':
+        if len(extras) == 1:
+            print('please use: rmtree <dir1> [<dir2...dirN]')
+            sys.exit(1)
+        for it in extras[1:]:
+            v.rmtree(it)
+    elif extras[0] == 'debug':
+        pass
     else:
         print('Unknown operation:', extras[0])
         sys.exit(1)

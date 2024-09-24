@@ -25,13 +25,17 @@ options:
   --change-password     Change the password required to open the vault
 ```
 
-After the `vauly_name`, you can specify some useful operations like:
+After the `vault_name`, you can specify some useful operations like:
 
 ```
 ls       list unecrypted vault contents (with size and time)
 decrypt  decrypt a file or directory from the vault's virtual filesystem into a given destination
 encrypt  encrypt a file or directory
 makedirs create a new directory/tree in the vault
+ln       create a symbolic link
+rm       erase a file or symbolic link
+rmdir    remove an empty directory
+rmtree   remove a full directory tree
 alias    show the real pathname linked to a virtual one
 backup   backup the Directory IDs (required to decrypt names) in a ZIP file
 ```
