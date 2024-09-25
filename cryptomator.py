@@ -13,7 +13,7 @@
 
 import argparse, getpass, hashlib, struct, base64
 import json, sys, io, os, operator
-import time, zipfile, locale, zlib, uuid
+import time, zipfile, locale, zlib, uuid, shutil
 from os.path import *
 
 try:
@@ -437,7 +437,8 @@ class Vault:
             print('rm: %s: is a directory' % virtualpath)
             return
         if x.hasSym:
-            # remove symlink.c9r and its parent
+            # remove symlink.c9r (and dir.c9r if link to a directory) and its parent
+            if x.isDir: os.remove(x.dirC9)
             os.remove(x.hasSym)
             os.rmdir(x.realPathName)
         if x.longName:
@@ -516,6 +517,9 @@ class Vault:
         out = open(join(a.realPathName, 'symlink.c9r'), 'wb')
         Vault._encryptf(p.pk, io.BytesIO(target.encode()), out) # does not check target existance
         out.close()
+        b = p.getInfo(target)
+        if b.isDir:
+            shutil.copy(b.dirC9, a.realPathName) # copy the original dir.c9r also
 
     def ls(p, virtualpath, recursive=False):
         "Print a list of contents of a virtual path"
