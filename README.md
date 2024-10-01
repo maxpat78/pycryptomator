@@ -25,26 +25,28 @@ options:
   --change-password     Change the password required to open the vault
 ```
 
-After the `vault_name`, you can specify some useful operations like:
-
-```
-ls       list unecrypted vault contents (with size and time)
-decrypt  decrypt a file or directory from the vault's virtual filesystem into a given destination
-encrypt  encrypt a file or directory
-makedirs create a new directory/tree in the vault
-ln       create a symbolic link
-rm       erase a file or symbolic link
-rmdir    remove an empty directory
-rmtree   remove a full directory tree
-alias    show the real pathname linked to a virtual one
-backup   backup the Directory IDs (required to decrypt names) in a ZIP file
-```
-
 Passing a couple options, you can show you master keys or recover them in case configuration files are corrupted:
 
 `--print-keys` shows the decrypted primary and hmac master key in ASCII85 or BASE64 form, or as a list of English words like Cryptomator itself, to annotate them in a safe place for recovering purposes.
 
 `--master-keys`  grants access to the vault even in case of lost configuration files `vault.cryptomator` and/or `masterkey.cryptomator`, provided the master keys as ASCII85 or BASE64 strings; `- -` can be used to read the words list from standard input.
+
+
+After the `vault_name`, you can specify some useful operations like:
+
+```
+ls       list unecrypted vault contents (with size and time)
+mkdir    create a new directory/tree in the vault
+mv       move or rename files and directories
+ln       create a symbolic link
+rm       erase files or directories
+decrypt  decrypt a file or directory from the vault's virtual filesystem into a given destination
+encrypt  encrypt a file or directory
+alias    show the real pathname linked to a virtual one
+backup   backup the Directory IDs (required to decrypt names) in a ZIP file
+```
+
+If no operation is specified, an interactive shell is launched on open vault.
 
 Functionality was tested in Windows 11 and Ubuntu 22.04 LTS Linux (under Windows WSL).
 

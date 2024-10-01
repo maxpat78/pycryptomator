@@ -12,8 +12,8 @@
 # EOL is <LF> to make bash happy with #!
 
 import argparse, getpass, hashlib, struct, base64
-import json, sys, io, os, operator
-import time, zipfile, locale, zlib, uuid, shutil
+import json, sys, io, os, operator, re, shlex
+import time, zipfile, locale, zlib, uuid, shutil, cmd
 from os.path import *
 
 try:
@@ -32,20 +32,22 @@ class PathInfo():
         p.longName = ''     # store the encrypted long name, if any
         p.dirId = ''        # directory id to crypt names inside the directory (or this file name, if it is a file)
         p.realPathName = '' # real (filesystem's) pathname derived crypting the virtual .pathname
+                            # when making dirs: also, intermediate dir to create
         p.realDir = ''      # real (filesystem's) contents directory associated to directory .pathname or containing file .pathname
         p.hasSym = ''       # path to the symlink.c9r, if it is a symbolic link
         p.isDir = 0         # whether it is (or points to) a directory
         p.pointsTo = ''     # destination of the symbolic link, if any
-        p.exists = 0
+        p.exists = 0        # if it exists on disk
     
     def __str__(p):
-        #~ return ".pathname=%s .dirId=%s .realPathName=%s .realDir=%s .hasSym=%s .isDir=%d .pointsTo=%s .exists=%d" % (p.pathname,p.dirId,p.realPathName,p.realDir,p.hasSym,p.isDir,p.pointsTo,p.exists)
+        base = '<%s' % (('nonexistent ','')[p.exists])
         if p.hasSym:
-            return '<PathInfo.Symlink (%s) "%s" -> "%s">' % (("File","Directory")[p.isDir], p.pathname, p.hasSym)
+            base += 'PathInfo.Symlink (%s) "%s" -> "%s"' % (("File","Directory")[p.isDir], p.pathname, p.pointsTo)
         elif p.isDir:
-            return '<PathInfo.Directory "%s">' % (p.pathname)
+            base += 'PathInfo.Directory "%s" (%s)' % (p.pathname, p.realDir)
         else:
-            return '<PathInfo.File "%s">' % (p.pathname)
+            base += 'PathInfo.File "%s"' % (p.pathname)
+        return base + " .realPathName=%s>" % (p.realPathName)
 
     @property
     def nameC9(p):
@@ -290,7 +292,7 @@ class Vault:
     def encryptDir(p, src, virtualpath, force=False):
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path must be absolute!')
-        real = p.makedirs(virtualpath)
+        real = p.mkdir(virtualpath)
         n=0
         nn=0
         total_bytes = 0
@@ -300,7 +302,7 @@ class Vault:
             for it in files:
                 fn = join(root, it)
                 dn = join(virtualpath, fn[len(src)+1:]) # target pathname
-                p.makedirs(dirname(dn))
+                p.mkdir(dirname(dn))
                 print(dn)
                 total_bytes += p.encryptFile(fn, dn, force)
                 n += 1
@@ -391,34 +393,30 @@ class Vault:
         x = p.getInfo(virtualpath)
         return os.stat(x.contentsC9)
 
-    def _mkdir(p, realpath):
-        "Initialize a new directory"
-        # make the encrypted directory
-        os.mkdir(realpath)
-        # assign a random directory id
-        dirId = str(uuid.uuid4()).encode()
-        open(join(realpath,'dir.c9r'),'wb').write(dirId)
-        # make the associated contents directory and store a backup copy of the dir id
-        hdid = p.hashDirId(dirId)
-        rp = join(p.base, 'd', hdid[:2], hdid[2:])
-        os.makedirs(rp)
-        backup = join(rp, 'dirid.c9r')
-        p.encryptFile(io.BytesIO(dirId), backup)
-        
-    def makedirs(p, virtualpath):
+    def mkdir(p, virtualpath):
         "Create a new directory or tree in the vault"
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path to the directory to create must be absolute!')
         while 1:
             x = v.getInfo(virtualpath)
             if x.exists: break
-            v._mkdir(x.realPathName)
+            # make the encrypted directory
+            os.mkdir(x.realPathName)
+            # assign a random directory id
+            dirId = str(uuid.uuid4()).encode()
+            open(join(x.realPathName,'dir.c9r'),'wb').write(dirId)
+            # make the associated contents directory and store a backup copy of the dir id
+            hdid = p.hashDirId(dirId)
+            rp = join(p.base, 'd', hdid[:2], hdid[2:])
+            os.makedirs(rp)
+            backup = join(rp, 'dirid.c9r')
+            p.encryptFile(io.BytesIO(dirId), backup)
             if x.longName: open(x.nameC9,'wb').write(x.longName)
         return x.realDir
 
     def makefile(p, virtualpath):
         "Create an empty file and, eventually, its intermediate directories"
-        p.makedirs(dirname(virtualpath)) # ensure base path exists
+        p.mkdir(dirname(virtualpath)) # ensure base path exists
         x = p.getInfo(virtualpath)
         if x.longName:
             dn = dirname(x.nameC9)
@@ -483,6 +481,7 @@ class Vault:
         else:
             os.remove(x.dirC9)
             os.rmdir(x.realPathName)
+        del p.dirid_cache[x.dirC9] # delete from cache also
 
     def rmtree(p, virtualpath):
         "Delete a full virtual directory tree"
@@ -508,7 +507,7 @@ class Vault:
                 dd += 1
         # Finally, delete the empty base directory
         p.rmdir(virtualpath)
-        print ('rmtree: deleted %d files in %d directories' % (ff,dd))
+        print ('rmtree: deleted %d files in %d directories in %s' % (ff,dd,virtualpath))
             
     def ln(p, target, symlink):
         "Create a symbolic link"
@@ -563,6 +562,43 @@ class Vault:
             if not recursive: break
         if recursive:
             print('\n   Total files listed:\n%s bytes in %s files and %s directories.' % (_fmt_size(gtot_size), _fmt_size(gtot_files), _fmt_size(gtot_dirs)))
+
+    def mv(p, src, dst):
+        "Move or rename files and directories"
+        a = p.getInfo(src)
+        b = p.getInfo(dst)
+        if not a.exists:
+            print("Can't move nonexistent object %s"%src)
+            return
+        if a.realPathName == b.realPathName:
+            print("Can't move an object onto itself: %s"%src)
+            return
+        if b.exists:
+            if not b.isDir:
+                print("Can't move %s, target exists already"%dst)
+                return
+            c = p.getInfo(join(dst, basename(src)))
+            if c.exists:
+                if c.isDir and os.listdir(c.realDir):
+                    print("Can't move, target directory \"%s\" not empty"%c.pathname)
+                    return
+                elif not c.isDir:
+                    print("Can't move \"%s\", target exists already"%c.pathname)
+                    return
+            shutil.move(a.realPathName, c.realPathName)
+            if a.longName:
+                open(c.nameC9,'wb').write(c.longName) # update long name
+            return
+        if a.longName:
+            # long name dir (file) -> file
+            if not a.isDir:
+                shutil.move(a.contentsC9, b.realPathName)
+                os.remove(a.nameC9)
+                os.rmdir(a.realPathName)
+                return
+            else:
+                os.remove(a.nameC9) # remove long name
+        os.rename(a.realPathName, b.realPathName) # change the encrypted name
 
     # os.walk by default does not follow dir links
     def walk(p, virtualpath):
@@ -817,6 +853,152 @@ class Wordsencoder:
         return crc.to_bytes(4,'little')[:2]
 
 
+class CMShell(cmd.Cmd):
+    intro = 'PyCryptomator Shell.  Type help or ? to list all available commands.'
+    prompt = 'PCM:> '
+
+    def preloop(p):
+        p.prompt = '%s:> ' % v.base
+
+    #~ def precmd(p, cmdline):
+        #~ 'Pre-process cmdline before passing it to a command'
+        #~ return cmdline
+
+    def do_debug(p, arg):
+        pass
+
+    def do_quit(p, arg):
+        'Quit the PyCryptomator Shell'
+        sys.exit(0)
+
+    def do_backup(p, arg):
+        'Backup all the dir.c9r with their tree structure in a ZIP archive'
+        argl = shlex.split(arg)
+        if not argl:
+            print('use: backup <ZIP archive>')
+            return
+        backupDirIds(v.base, argl[0])
+        
+    def do_decrypt(p, arg):
+        'Decrypt files or directories from the vault'
+        argl = shlex.split(arg)
+        force = '-f' in argl
+        if force: argl.remove('-f')
+        if not argl or argl[0] == '-h' or len(argl) != 2:
+            print('use: decrypt [-f] <virtual_pathname_source> <real_pathname_destination>')
+            print('use: decrypt <virtual_pathname_source> -')
+            return
+        try:
+            is_dir = v.getInfo(argl[0]).isDir
+            if is_dir: v.decryptDir(argl[0], argl[1], force)
+            else:
+                v.decryptFile(argl[0], argl[1], force)
+                if argl[1] == '-': print()
+        except:
+            print(sys.exception())
+
+    def do_encrypt(p, arg):
+        'Encrypt files or directories into the vault'
+        argl = shlex.split(arg)
+        if not argl or argl[0] == '-h' or len(argl) != 2:
+            print('use: encrypt <real_pathname_source> <virtual_pathname_destination>')
+            return
+        try:
+            if isdir(argl[0]):
+                v.encryptDir(argl[0], argl[1])
+            else:
+                v.encryptFile(argl[0], argl[1])
+        except:
+            print(sys.exception())
+
+    def do_ls(p, arg):
+        'List files and directories'
+        argl = shlex.split(arg)
+        recursive = '-r' in argl
+        if recursive: argl.remove('-r')
+        if not argl: argl += ['/'] # implicit argument
+        if argl[0] == '-h':
+            print('use: ls [-r] <virtual_path1> [...<virtual_pathN>]')
+            return
+        for it in argl:
+            try:
+                v.ls(it, recursive)
+            except:
+                pass
+        
+    def do_ln(p, arg):
+        'Make a symbolic link to a file or directory'
+        argl = shlex.split(arg)
+        if len(argl) != 2:
+            print('use: ln <target_virtual_pathname> <symbolic_link_virtual_pathname>')
+            return
+        try:
+            v.ln(argl[0], argl[1])
+        except:
+            print(sys.exception())
+
+    def do_mkdir(p, arg):
+        'Make a directory or directory tree'
+        argl = shlex.split(arg)
+        if not argl or argl[0] == '-h':
+            print('use: mkdir <dir1> [...<dirN>]')
+            return
+        for it in argl:
+            try:
+                v.mkdir(it)
+            except:
+                print(sys.exception())
+
+    def do_mv(p, arg):
+        'Move or rename files or directories'
+        argl = shlex.split(arg)
+        if len(argl) < 2 or argl[0] == '-h':
+            print('please use: mv <source> [<source2>...<sourceN>] <destination>')
+            return
+        for it in argl[:-1]:
+            v.mv(it, argl[-1])
+
+    def do_rm(p, arg):
+        'Remove files and directories'
+        argl = shlex.split(arg)
+        force = '-f' in argl
+        if force: argl.remove('-f')
+        if not argl or argl[0] == '-h':
+            print('use: rm <file1|dir1> [...<fileN|dirN>]')
+            return
+        for it in argl:
+            if it == '/':
+                print("Won't erase root directory.")
+                return
+            try:
+                i = v.getInfo(it)
+                if not i.isDir:
+                    v.remove(it) # del file
+                    continue
+                if force:
+                    v.rmtree(it) # del dir, even if nonempty
+                    continue
+                v.rmdir(it) # del empty dir
+            except:
+                print(sys.exception())
+
+
+def split_arg_string(s):
+    rv = []
+    for match in re.finditer(r"('([^'\\]*(?:\\.[^'\\]*)*)'"
+                             r'|"([^"\\]*(?:\\.[^"\\]*)*)"'
+                             r'|\S+)\s*', s, re.S):
+        arg = match.group().strip()
+        if arg[:1] == arg[-1:] and arg[:1] in '"\'':
+            arg = arg[1:-1].encode('ascii', 'backslashreplace').decode('unicode-escape')
+        try:
+            arg = type(s)(arg)
+        except UnicodeError:
+            pass
+        rv.append(arg)
+    return rv
+
+
 
 if __name__ == '__main__':
     locale.setlocale(locale.LC_ALL, '')
@@ -889,82 +1071,9 @@ if __name__ == '__main__':
         sys.exit(0)
 
     if not extras:
-        print('An operation must be specified among alias, backup, decrypt, encrypt, ln, ls, makedirs, rm, rmdir, rmtree.')
-        sys.exit(1)
-
-    if extras[0] == 'alias':
-        if len(extras) == 1:
-            print('please use: alias <virtual_pathname>')
-            sys.exit(1)
-        x = v.getInfo(extras[1])
-        #~ print('"%s" is the real pathname for %s' % (v.getFilePath(extras[1]), extras[1]))
-        print('"%s" is the real pathname for %s' % (x.nameC9, extras[1]))
-    elif extras[0] == 'backup':
-        if len(extras) == 1:
-            print('please use: backup <ZIP archive>')
-            sys.exit(1)
-        backupDirIds(v.base, extras[1])
-        print('done.')
-    elif extras[0] == 'ls':
-        recursive = '-r' in extras
-        if recursive: extras.remove('-r')
-        if len(extras) == 1:
-            #~ print('please use: ls [-r] <virtual_path1> [...<virtual_pathN>]')
-            extras += ['/'] # implicit argument
-        for it in extras[1:]:
-            v.ls(it, recursive)
-    elif extras[0] == 'decrypt': # decrypt files or directories
-        force = '-f' in extras
-        if force: extras.remove('-f')
-        if len(extras) != 3:
-            print('please use: decrypt [-f] <virtual_pathname_source> <real_pathname_destination>')
-            sys.exit(1)
-        is_dir = v.getInfo(extras[1]).isDir
-        if is_dir: v.decryptDir(extras[1], extras[2], force)
-        else:
-            v.decryptFile(extras[1], extras[2], force)
-            if extras[2] == '-': print()
-            print('done.')
-    elif extras[0] == 'makedirs':
-        if len(extras) != 2:
-            print('please use: makedirs <virtual_pathname>') # intermediate directories get created
-            sys.exit(1)
-        v.makedirs(extras[1])
-    elif extras[0] == 'ln':
-        if len(extras) != 3:
-            print('please use: ln <target_virtual_pathname> <symbolic_link_virtual_pathname>')
-            sys.exit(1)
-        v.ln(extras[1], extras[2])
-        print('done.')
-    elif extras[0] == 'encrypt': # encrypt files or directories
-        if len(extras) != 3:
-            print('please use: encrypt <real_pathname_source> <virtual_pathname_destination>')
-            sys.exit(1)
-        if isdir(extras[1]):
-            v.encryptDir(extras[1], extras[2])
-        else:
-            v.encryptFile(extras[1], extras[2])
-            print('done.')
-    elif extras[0] == 'rm':
-        if len(extras) == 1:
-            print('please use: rm <file1> [<file2...fileN]')
-            sys.exit(1)
-        for it in extras[1:]:
-            v.remove(it)
-    elif extras[0] == 'rmdir':
-        if len(extras) == 1:
-            print('please use: rmdir <dir1> [<dir2...dirN]')
-            sys.exit(1)
-        for it in extras[1:]:
-            v.rmdir(it)
-    elif extras[0] == 'rmtree':
-        if len(extras) == 1:
-            print('please use: rmtree <dir1> [<dir2...dirN]')
-            sys.exit(1)
-        for it in extras[1:]:
-            v.rmtree(it)
-    elif extras[0] == 'debug':
-        pass
+        CMShell().cmdloop() # start a shell with open vault
     else:
-        print('Unknown operation:', extras[0])
-        sys.exit(1)
+        # We must re-quote args, shlex should suffice
+        CMShell().onecmd(shlex.join(extras)) # execute single command via shell
+        
+    sys.exit(0)
