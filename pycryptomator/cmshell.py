@@ -3,7 +3,7 @@ from os.path import *
 from .cryptomator import *
 
 if os.name == 'nt':
-    from w32lex import split # shlex ban \ in pathnames!
+    from .w32lex import split # shlex ban \ in pathnames!
 else:
     from shlex import split
 
@@ -62,16 +62,18 @@ class CMShell(cmd.Cmd):
             print(sys.exception())
 
     def do_encrypt(p, arg):
-        'Encrypt files or directories into the vault'
+        'Encrypt files or directories into the vault, eventually moving them'
         argl = split(arg)
+        move = '-m' in argl
+        if move: argl.remove('-m')
         if not argl or argl[0] == '-h' or len(argl) != 2:
-            print('use: encrypt <real_pathname_source> <virtual_pathname_destination>')
+            print('use: encrypt [-m] <real_pathname_source> <virtual_pathname_destination>')
             return
         try:
             if isdir(argl[0]):
-                p.vault.encryptDir(argl[0], argl[1])
+                p.vault.encryptDir(argl[0], argl[1], move=move)
             else:
-                p.vault.encryptFile(argl[0], argl[1])
+                p.vault.encryptFile(argl[0], argl[1], move=move)
         except:
             print(sys.exception())
             

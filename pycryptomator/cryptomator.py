@@ -265,7 +265,7 @@ class Vault:
             dst.write(tag)
             n += 1
 
-    def encryptFile(p, src, virtualpath, force=False):
+    def encryptFile(p, src, virtualpath, force=False, move=False):
         "Encrypt a 'src' file into a pre-existant vault's virtual directory (or a file-like object into a real path)"
         if hasattr(src, 'read'): # if it's file
             f = src
@@ -285,9 +285,11 @@ class Vault:
         if not hasattr(src, 'read'):
             st = os.stat(src)
             os.utime(out.name, (st.st_atime, st.st_mtime))
+            if move:
+                os.remove(src)
         return cb
 
-    def encryptDir(p, src, virtualpath, force=False):
+    def encryptDir(p, src, virtualpath, force=False, move=False):
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path must be absolute!')
         real = p.mkdir(virtualpath)
@@ -302,8 +304,11 @@ class Vault:
                 dn = join(virtualpath, fn[len(src)+1:]) # target pathname
                 p.mkdir(dirname(dn))
                 print(dn)
-                total_bytes += p.encryptFile(fn, dn, force)
+                total_bytes += p.encryptFile(fn, dn, force, move)
                 n += 1
+        if move:
+            print('moved', src)
+            shutil.rmtree(src)
         T1 = time.time()
         print('encrypting %s bytes in %d files and %d directories took %d seconds' % (_fmt_size(total_bytes), n, nn, T1-T0))
 
