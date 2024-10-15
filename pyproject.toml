@@ -30,7 +30,7 @@ dependencies = [
 "Source" = "https://github.com/maxpat78/pycryptomator"
 
 [tool.setuptools]
-packages = ["pycryptomator"]
+packages = ["pycryptomator", "pycryptomator.w32lex"]
 package-data = {"pycryptomator" = ["*.txt"]}
 
 [tool.setuptools.dynamic]

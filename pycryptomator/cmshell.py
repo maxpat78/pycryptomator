@@ -1,6 +1,11 @@
-import cmd, sys, shlex
+import cmd, sys, os
 from os.path import *
 from .cryptomator import *
+
+if os.name == 'nt':
+    from w32lex import split # shlex ban \ in pathnames!
+else:
+    from shlex import split
 
 class CMShell(cmd.Cmd):
     intro = 'PyCryptomator Shell.  Type help or ? to list all available commands.'
@@ -22,7 +27,8 @@ class CMShell(cmd.Cmd):
         sys.exit(0)
 
     def do_alias(p, arg):
-        argl = shlex.split(arg)
+        'Show the real pathname of a virtual file or directory'
+        argl = split(arg)
         if not argl:
             print('use: alias <virtual pathname>')
             return
@@ -31,7 +37,7 @@ class CMShell(cmd.Cmd):
         
     def do_backup(p, arg):
         'Backup all the dir.c9r with their tree structure in a ZIP archive'
-        argl = shlex.split(arg)
+        argl = split(arg)
         if not argl:
             print('use: backup <ZIP archive>')
             return
@@ -39,7 +45,7 @@ class CMShell(cmd.Cmd):
         
     def do_decrypt(p, arg):
         'Decrypt files or directories from the vault'
-        argl = shlex.split(arg)
+        argl = split(arg)
         force = '-f' in argl
         if force: argl.remove('-f')
         if not argl or argl[0] == '-h' or len(argl) != 2:
@@ -57,7 +63,7 @@ class CMShell(cmd.Cmd):
 
     def do_encrypt(p, arg):
         'Encrypt files or directories into the vault'
-        argl = shlex.split(arg)
+        argl = split(arg)
         if not argl or argl[0] == '-h' or len(argl) != 2:
             print('use: encrypt <real_pathname_source> <virtual_pathname_destination>')
             return
@@ -71,7 +77,7 @@ class CMShell(cmd.Cmd):
             
     def do_ls(p, arg):
         'List files and directories'
-        argl = shlex.split(arg)
+        argl = split(arg)
         recursive = '-r' in argl
         if recursive: argl.remove('-r')
         if not argl: argl += ['/'] # implicit argument
@@ -86,7 +92,7 @@ class CMShell(cmd.Cmd):
         
     def do_ln(p, arg):
         'Make a symbolic link to a file or directory'
-        argl = shlex.split(arg)
+        argl = split(arg)
         if len(argl) != 2:
             print('use: ln <target_virtual_pathname> <symbolic_link_virtual_pathname>')
             return
@@ -97,7 +103,7 @@ class CMShell(cmd.Cmd):
 
     def do_mkdir(p, arg):
         'Make a directory or directory tree'
-        argl = shlex.split(arg)
+        argl = split(arg)
         if not argl or argl[0] == '-h':
             print('use: mkdir <dir1> [...<dirN>]')
             return
@@ -109,7 +115,7 @@ class CMShell(cmd.Cmd):
 
     def do_mv(p, arg):
         'Move or rename files or directories'
-        argl = shlex.split(arg)
+        argl = split(arg)
         if len(argl) < 2 or argl[0] == '-h':
             print('please use: mv <source> [<source2>...<sourceN>] <destination>')
             return
@@ -118,7 +124,7 @@ class CMShell(cmd.Cmd):
 
     def do_rm(p, arg):
         'Remove files and directories'
-        argl = shlex.split(arg)
+        argl = split(arg)
         force = '-f' in argl
         if force: argl.remove('-f')
         if not argl or argl[0] == '-h':
