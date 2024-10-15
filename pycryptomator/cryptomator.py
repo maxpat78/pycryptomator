@@ -536,7 +536,7 @@ class Vault:
         info = p.getInfo(virtualpath)
         if not info.isDir:
             print(virtualpath, 'is not a directory!')
-            sys.exit(1)
+            return
         if info.pointsTo:
             print(virtualpath, 'points to', info.pointsTo)
             virtualpath = info.pointsTo
@@ -546,11 +546,11 @@ class Vault:
             tot_size = 0
             for it in dirs:
                 full = join(root, it)
-                st = v.stat(full)
+                st = p.stat(full)
                 print('%12s  %s  %s' %('<DIR>', time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
             for it in files:
                 full = join(root, it)
-                st = v.stat(full)
+                st = p.stat(full)
                 size = _realsize(st.st_size)
                 tot_size += size
                 info = p.getInfo(full)
