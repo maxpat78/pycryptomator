@@ -1,5 +1,3 @@
-#!/usr/bin/python3
-
 """
 
    MIT License
@@ -11,9 +9,9 @@
 # Requires pycryptodome(x)
 # EOL is <LF> to make bash happy with #!
 
-import argparse, getpass, hashlib, struct, base64
-import json, sys, io, os, operator, re, shlex
-import time, zipfile, locale, zlib, uuid, shutil, cmd
+import getpass, hashlib, struct, base64
+import json, sys, io, os, operator
+import time, zipfile, locale, zlib, uuid, shutil
 from os.path import *
 
 try:
@@ -276,7 +274,7 @@ class Vault:
                 raise BaseException('Source file does not exist: '+src)
             f = open(src, 'rb')
         if not basename(virtualpath).endswith('dirid.c9r'):
-            rp = p.makefile(virtualpath)
+            rp = p.create(virtualpath)
         else:
             rp = virtualpath
         out = open(rp,'wb')
@@ -398,7 +396,7 @@ class Vault:
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path to the directory to create must be absolute!')
         while 1:
-            x = v.getInfo(virtualpath)
+            x = p.getInfo(virtualpath)
             if x.exists: break
             # make the encrypted directory
             os.mkdir(x.realPathName)
@@ -414,7 +412,7 @@ class Vault:
             if x.longName: open(x.nameC9,'wb').write(x.longName)
         return x.realDir
 
-    def makefile(p, virtualpath):
+    def create(p, virtualpath):
         "Create an empty file and, eventually, its intermediate directories"
         p.mkdir(dirname(virtualpath)) # ensure base path exists
         x = p.getInfo(virtualpath)
@@ -851,229 +849,3 @@ class Wordsencoder:
         if len(s) != 64:  raise BaseException('Decoded master keys must be 512 bits long!')
         crc = zlib.crc32(s)
         return crc.to_bytes(4,'little')[:2]
-
-
-class CMShell(cmd.Cmd):
-    intro = 'PyCryptomator Shell.  Type help or ? to list all available commands.'
-    prompt = 'PCM:> '
-
-    def preloop(p):
-        p.prompt = '%s:> ' % v.base
-
-    #~ def precmd(p, cmdline):
-        #~ 'Pre-process cmdline before passing it to a command'
-        #~ return cmdline
-
-    def do_debug(p, arg):
-        pass
-
-    def do_quit(p, arg):
-        'Quit the PyCryptomator Shell'
-        sys.exit(0)
-
-    def do_backup(p, arg):
-        'Backup all the dir.c9r with their tree structure in a ZIP archive'
-        argl = shlex.split(arg)
-        if not argl:
-            print('use: backup <ZIP archive>')
-            return
-        backupDirIds(v.base, argl[0])
-        
-    def do_decrypt(p, arg):
-        'Decrypt files or directories from the vault'
-        argl = shlex.split(arg)
-        force = '-f' in argl
-        if force: argl.remove('-f')
-        if not argl or argl[0] == '-h' or len(argl) != 2:
-            print('use: decrypt [-f] <virtual_pathname_source> <real_pathname_destination>')
-            print('use: decrypt <virtual_pathname_source> -')
-            return
-        try:
-            is_dir = v.getInfo(argl[0]).isDir
-            if is_dir: v.decryptDir(argl[0], argl[1], force)
-            else:
-                v.decryptFile(argl[0], argl[1], force)
-                if argl[1] == '-': print()
-        except:
-            print(sys.exception())
-
-    def do_encrypt(p, arg):
-        'Encrypt files or directories into the vault'
-        argl = shlex.split(arg)
-        if not argl or argl[0] == '-h' or len(argl) != 2:
-            print('use: encrypt <real_pathname_source> <virtual_pathname_destination>')
-            return
-        try:
-            if isdir(argl[0]):
-                v.encryptDir(argl[0], argl[1])
-            else:
-                v.encryptFile(argl[0], argl[1])
-        except:
-            print(sys.exception())
-
-    def do_ls(p, arg):
-        'List files and directories'
-        argl = shlex.split(arg)
-        recursive = '-r' in argl
-        if recursive: argl.remove('-r')
-        if not argl: argl += ['/'] # implicit argument
-        if argl[0] == '-h':
-            print('use: ls [-r] <virtual_path1> [...<virtual_pathN>]')
-            return
-        for it in argl:
-            try:
-                v.ls(it, recursive)
-            except:
-                pass
-        
-    def do_ln(p, arg):
-        'Make a symbolic link to a file or directory'
-        argl = shlex.split(arg)
-        if len(argl) != 2:
-            print('use: ln <target_virtual_pathname> <symbolic_link_virtual_pathname>')
-            return
-        try:
-            v.ln(argl[0], argl[1])
-        except:
-            print(sys.exception())
-
-    def do_mkdir(p, arg):
-        'Make a directory or directory tree'
-        argl = shlex.split(arg)
-        if not argl or argl[0] == '-h':
-            print('use: mkdir <dir1> [...<dirN>]')
-            return
-        for it in argl:
-            try:
-                v.mkdir(it)
-            except:
-                print(sys.exception())
-
-    def do_mv(p, arg):
-        'Move or rename files or directories'
-        argl = shlex.split(arg)
-        if len(argl) < 2 or argl[0] == '-h':
-            print('please use: mv <source> [<source2>...<sourceN>] <destination>')
-            return
-        for it in argl[:-1]:
-            v.mv(it, argl[-1])
-
-    def do_rm(p, arg):
-        'Remove files and directories'
-        argl = shlex.split(arg)
-        force = '-f' in argl
-        if force: argl.remove('-f')
-        if not argl or argl[0] == '-h':
-            print('use: rm <file1|dir1> [...<fileN|dirN>]')
-            return
-        for it in argl:
-            if it == '/':
-                print("Won't erase root directory.")
-                return
-            try:
-                i = v.getInfo(it)
-                if not i.isDir:
-                    v.remove(it) # del file
-                    continue
-                if force:
-                    v.rmtree(it) # del dir, even if nonempty
-                    continue
-                v.rmdir(it) # del empty dir
-            except:
-                print(sys.exception())
-
-
-def split_arg_string(s):
-    rv = []
-    for match in re.finditer(r"('([^'\\]*(?:\\.[^'\\]*)*)'"
-                             r'|"([^"\\]*(?:\\.[^"\\]*)*)"'
-                             r'|\S+)\s*', s, re.S):
-        arg = match.group().strip()
-        if arg[:1] == arg[-1:] and arg[:1] in '"\'':
-            arg = arg[1:-1].encode('ascii', 'backslashreplace').decode('unicode-escape')
-        try:
-            arg = type(s)(arg)
-        except UnicodeError:
-            pass
-        rv.append(arg)
-    return rv
-
-
-
-if __name__ == '__main__':
-    locale.setlocale(locale.LC_ALL, '')
-
-    parser = argparse.ArgumentParser(description="Access to a Cryptomator V8 vault")
-    parser.add_argument('--init', action="store_true", help="Initialize a new vault in an empty directory")
-    parser.add_argument('--print-keys', help="Print the raw master keys as a list of English words for Cryptomator (default), in ASCII85 (a85) or BASE64 (b64) format", type=str, choices=['a85','b64','words'], const='words', nargs='?')
-    parser.add_argument('--master-keys', nargs=2, metavar=('PRIMARY_KEY', 'HMAC_KEY'), help="Primary and HMAC master keys in ASCII85 or BASE64 format, or - - to read a words list from standard input")
-    parser.add_argument('--password', help="Password to unlock master keys stored in config file")
-    parser.add_argument('--change-password', help="Change the password required to open the vault", action="store_true")
-    parser.add_argument('vault_name', help="Location of the existing Cryptomator V8 vault to use")
-    args, extras = parser.parse_known_args()
-
-    if args.init:
-        init_vault(args.vault_name, args.password)
-        sys.exit(0)
-
-    if not args.password and not args.master_keys:
-        args.password = getpass.getpass()
-
-    if args.master_keys:
-        if args.master_keys[0] == '-':
-            words = input('Words list: ')
-            words = words.split()
-            if len(words) != 44: raise BaseException('Not enough words')
-            we = Wordsencoder(join(dirname(sys.argv[0]), '4096words_en.txt'))
-            b = we.words2bytes(words)
-            we.validate(b)
-            pk = b[:32]
-            hk = b[32:64]
-            print()
-        else:
-            def tryDecode(s):
-                e = 0
-                d = b''
-                try: d = base64.a85decode(s)
-                except: pass
-                if len(d) == 32: return d
-                try: d = base64.urlsafe_b64decode(s)
-                except: pass
-                if len(d) == 32: return d
-                raise BaseException('Could not decode master key "%s"'%s)
-            pk = tryDecode(args.master_keys[0])
-            hk = tryDecode(args.master_keys[1])
-        v = Vault(args.vault_name, pk=pk, hk=hk)
-    else:
-        v = Vault(args.vault_name, args.password)
-
-    if args.print_keys:
-        print('\n   * * *  WARNING !!!  * * *\n')
-        print('KEEP THESE KEYS TOP SECRET!\nFor recovering purposes only.\n')
-
-        if args.print_keys == 'a85':
-            encoder = base64.a85encode
-        elif args.print_keys == 'b64':
-            encoder = base64.urlsafe_b64encode
-        else:
-            # initialize the words encoder with a dictionary in the same directory
-            # it contains 4096 English words
-            we = Wordsencoder(join(dirname(sys.argv[0]), '4096words_en.txt'))
-            words = we.bytes2words(we.blob(v.pk, v.hk))
-            print(' '.join(words))
-            sys.exit(0)
-        print('Primary master key :', encoder(v.pk).decode())
-        print('HMAC master key    :', encoder(v.hk).decode())
-        sys.exit(0)
-
-    if args.change_password:
-        v.change_password()
-        sys.exit(0)
-
-    if not extras:
-        CMShell().cmdloop() # start a shell with open vault
-    else:
-        # We must re-quote args, shlex should suffice
-        CMShell().onecmd(shlex.join(extras)) # execute single command via shell
-        
-    sys.exit(0)

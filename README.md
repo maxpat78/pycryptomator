@@ -1,6 +1,6 @@
 # pycryptomator
 
-A simple Python 3 script to access a Cryptomator V8 vault and carry on some useful operations.
+A Python 3 package to access a Cryptomator V8 vault and carry on some useful operations.
 
 ```
 usage: cryptomator.py [-h] [--init] [--print-keys [{a85,b64,words}]] [--master-keys PRIMARY_KEY HMAC_KEY]
@@ -25,11 +25,17 @@ options:
   --change-password     Change the password required to open the vault
 ```
 
-Passing a couple options, you can show you master keys or recover them in case configuration files are corrupted:
+Passing a couple options, you can show you master keys or recover them in case
+configuration files are corrupted:
 
-`--print-keys` shows the decrypted primary and hmac master key in ASCII85 or BASE64 form, or as a list of English words like Cryptomator itself, to annotate them in a safe place for recovering purposes.
+`--print-keys` shows the decrypted primary and hmac master key in ASCII85
+or BASE64 form, or as a list of English words like Cryptomator itself, to
+annotate them in a safe place for recovering purposes.
 
-`--master-keys`  grants access to the vault even in case of lost configuration files `vault.cryptomator` and/or `masterkey.cryptomator`, provided the master keys as ASCII85 or BASE64 strings; `- -` can be used to read the words list from standard input.
+`--master-keys`  grants access to the vault even in case of lost configuration
+files `vault.cryptomator` and/or `masterkey.cryptomator`, provided the master
+keys as ASCII85 or BASE64 strings; `- -` can be used to read the words list
+from standard input.
 
 
 After the `vault_name`, you can specify some useful operations like:
