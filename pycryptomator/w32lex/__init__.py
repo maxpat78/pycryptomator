@@ -1,7 +1,9 @@
 COPYRIGHT = '''Copyright (C)2024, by maxpat78.'''
 
 __all__ = ["split", "quote", "join", "cmd_parse", "cmd_split", "cmd_quote"]
-__version__ = '0.9.9'
+__version__ = '1.0.0'
+
+import os
 
 class NotExpected(Exception):
     def __init__ (p, s):
@@ -12,6 +14,8 @@ SPLIT_SHELL32 = 0 # CommandLineToArgvW (and pre-2005 VC Runtime) mode (default)
 SPLIT_ARGV0   = 1 # full compatibility: simplified parsing of argv[0]
 SPLIT_VC2005  = 2 # enable VC2005+ handling of quoted double quote
 CMD_VAREXPAND = 4 # expand %variables%
+CMD_EXCLMARK  = 8 # expand delayed expansion !variables!
+
 
 def split(s, mode=SPLIT_SHELL32):
     """Split a command line like CommandLineToArgvW (SHELL32) or old parse_cmdline
@@ -145,6 +149,7 @@ def cmd_parse(s, mode=SPLIT_SHELL32|CMD_VAREXPAND):
     escaped = 0
     quoted = 0
     percent = 0
+    exclamation = 0
     meta = 0 # special chars in a row
     arg = ''
     argv = []
@@ -193,6 +198,18 @@ def cmd_parse(s, mode=SPLIT_SHELL32|CMD_VAREXPAND):
                 percent = 0
                 continue
             percent = i # record percent position
+            continue
+        if c == '!' and (mode&CMD_EXCLMARK):
+            arg += c
+            if exclamation and exclamation != i-1:
+                if not escaped:
+                    vname = s[exclamation:i-1]
+                    val = os.environ.get(vname)
+                    #~ print('debug: "%s": trying to replace var "%s" with "%s"' %(s,vname,val))
+                    if val: arg = arg.replace('!'+vname+'!', val)
+                exclamation = 0
+                continue
+            exclamation = i # record exclamation mark position
             continue
         # pipe, redirection, &, && and ||: break argument, and set aside special char/couple
         # multiple pipe, redirection, &, && and || in sequence are forbidden
@@ -245,7 +262,7 @@ def cmd_quote(s):
     # suitable means [x] == cmd_split(cmd_quote(x))
     arg = ''
     for c in s:
-        if c in ('^%<|>&'): arg += '^' # escape the escapable!
+        if c in ('^%!<|>&'): arg += '^' # escape the escapable!
         arg += c
     if (' ' in arg) or ('\\' in arg):
          # quote only when special split chars inside,

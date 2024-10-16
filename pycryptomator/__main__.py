@@ -2,7 +2,7 @@ import locale, sys, argparse, shlex
 from os.path import *
 from .cryptomator import *
 from .cmshell import CMShell
-
+from .wordscodec import Wordscodec
 """
 
    MIT License
@@ -34,7 +34,7 @@ if args.master_keys:
         words = input('Words list: ')
         words = words.split()
         if len(words) != 44: raise BaseException('Not enough words')
-        we = Wordsencoder(join(dirname(sys.argv[0]), '4096words_en.txt'))
+        we = Wordscodec(join(dirname(sys.argv[0]), '4096words_en.txt'))
         b = we.words2bytes(words)
         we.validate(b)
         pk = b[:32]
@@ -68,7 +68,7 @@ if args.print_keys:
     else:
         # initialize the words encoder with a dictionary in the same directory
         # it contains 4096 English words
-        we = Wordsencoder(join(dirname(sys.argv[0]), '4096words_en.txt'))
+        we = Wordscodec(join(dirname(sys.argv[0]), '4096words_en.txt'))
         words = we.bytes2words(we.blob(v.pk, v.hk))
         print(' '.join(words))
         sys.exit(0)
