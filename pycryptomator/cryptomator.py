@@ -336,7 +336,7 @@ class Vault:
             dst.write(ds)
             n += 1
 
-    def decryptFile(p, virtualpath, dest, force=False):
+    def decryptFile(p, virtualpath, dest, force=False, move=False):
         "Decrypt a file from a virtual pathname and puts it in 'dest' (a real pathname or file-like object)"
         info = p.getInfo(virtualpath)
         while info.pointsTo:
@@ -361,9 +361,11 @@ class Vault:
         if dest != '-' and not hasattr(dest, 'write'):
             # restore original last access and modification time
             os.utime(dest, (st.st_atime, st.st_mtime))
+            if move:
+                p.remove(info.pathname)
         return st.st_size
     
-    def decryptDir(p, virtualpath, dest, force=False):
+    def decryptDir(p, virtualpath, dest, force=False, move=False):
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path to decrypt must be absolute!')
         x = p.getInfo(virtualpath)
@@ -382,8 +384,11 @@ class Vault:
                 if not exists(bn):
                     os.makedirs(bn)
                 print(dn)
-                total_bytes += p.decryptFile(fn, dn, force)
+                total_bytes += p.decryptFile(fn, dn, force, move)
                 n += 1
+        if move:
+            print('moved', virtualpath)
+            p.rmtree(virtualpath)
         T1 = time.time()
         print('decrypting %s bytes in %d files and %d directories took %d seconds' % (_fmt_size(total_bytes), n, nn, T1-T0))
 

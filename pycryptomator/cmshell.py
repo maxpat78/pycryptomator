@@ -46,17 +46,19 @@ class CMShell(cmd.Cmd):
     def do_decrypt(p, arg):
         'Decrypt files or directories from the vault'
         argl = split(arg)
+        move = '-m' in argl
+        if move: argl.remove('-m')
         force = '-f' in argl
         if force: argl.remove('-f')
         if not argl or argl[0] == '-h' or len(argl) != 2:
-            print('use: decrypt [-f] <virtual_pathname_source> <real_pathname_destination>')
+            print('use: decrypt [-m] [-f] <virtual_pathname_source> <real_pathname_destination>')
             print('use: decrypt <virtual_pathname_source> -')
             return
         try:
             is_dir = p.vault.getInfo(argl[0]).isDir
-            if is_dir: p.vault.decryptDir(argl[0], argl[1], force)
+            if is_dir: p.vault.decryptDir(argl[0], argl[1], force, move)
             else:
-                p.vault.decryptFile(argl[0], argl[1], force)
+                p.vault.decryptFile(argl[0], argl[1], force, move)
                 if argl[1] == '-': print()
         except:
             print(sys.exception())

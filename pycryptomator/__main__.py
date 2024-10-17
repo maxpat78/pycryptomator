@@ -26,6 +26,10 @@ if args.init:
     init_vault(args.vault_name, args.password)
     sys.exit(0)
 
+if not exists(args.vault_name):
+    print('Specified vault does not exist:', args.vault_name)
+    sys.exit(1)
+
 if not args.password and not args.master_keys:
     args.password = getpass.getpass()
 
