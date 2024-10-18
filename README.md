@@ -3,7 +3,7 @@
 A Python 3 package to access a Cryptomator V8 vault and carry on some useful operations.
 
 ```
-usage: cryptomator.py [-h] [--init] [--print-keys [{a85,b64,words}]] [--master-keys PRIMARY_KEY HMAC_KEY]
+usage: pycryptomator  [-h] [--init] [--print-keys [{a85,b64,words}]] [--master-keys PRIMARY_KEY HMAC_KEY]
                       [--password PASSWORD] [--change-password]
                       vault_name
 

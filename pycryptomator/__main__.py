@@ -1,8 +1,13 @@
-import locale, sys, argparse, shlex
+import locale, sys, argparse
 from os.path import *
 from .cryptomator import *
 from .cmshell import CMShell
 from .wordscodec import Wordscodec
+if os.name == 'nt':
+    import pycryptomator.w32lex as shlex # default shlex ban \ in pathnames!
+else:
+    import shlex
+
 """
 
    MIT License

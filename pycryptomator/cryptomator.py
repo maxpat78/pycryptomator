@@ -7,7 +7,7 @@
 """
 import getpass, hashlib, struct, base64
 import json, sys, io, os, operator
-import time, zipfile, locale, uuid, shutil
+import time, zipfile, locale, uuid, shutil, fnmatch
 from os.path import *
 
 try:
@@ -288,20 +288,24 @@ class Vault:
     def encryptDir(p, src, virtualpath, force=False, move=False):
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path must be absolute!')
+        src_dir = basename(src) # directory name we want to encrypt
         real = p.mkdir(virtualpath)
-        n=0
-        nn=0
+        n=0 # files count
+        nn=0 # dirs count
         total_bytes = 0
         T0 = time.time()
         for root, dirs, files in os.walk(src):
             nn+=1
-            for it in files:
+            for it in files+dirs:
                 fn = join(root, it)
-                dn = join(virtualpath, fn[len(src)+1:]) # target pathname
+                dn = join(virtualpath, src_dir, fn[len(src)+1:]) # target pathname
                 p.mkdir(dirname(dn))
+                if it in files:
+                    total_bytes += p.encryptFile(fn, dn, force, move)
+                    n += 1
+                else:
+                    p.mkdir(dn) # makes empty directories, also
                 print(dn)
-                total_bytes += p.encryptFile(fn, dn, force, move)
-                n += 1
         if move:
             print('moved', src)
             shutil.rmtree(src)
@@ -377,15 +381,18 @@ class Vault:
         T0 = time.time()
         for root, dirs, files in p.walk(virtualpath):
             nn+=1
-            for it in files:
+            for it in files+dirs:
                 fn = join(root, it)
                 dn = join(dest, fn[1:]) # target pathname
                 bn = dirname(dn) # target base dir
                 if not exists(bn):
                     os.makedirs(bn)
+                if it in files:
+                    total_bytes += p.decryptFile(fn, dn, force, move)
+                    n += 1
+                else:
+                    if not exists(dn): os.makedirs(dn)
                 print(dn)
-                total_bytes += p.decryptFile(fn, dn, force, move)
-                n += 1
         if move:
             print('moved', virtualpath)
             p.rmtree(virtualpath)
@@ -535,9 +542,6 @@ class Vault:
             return size
 
         info = p.getInfo(virtualpath)
-        if not info.isDir:
-            print(virtualpath, 'is not a directory!')
-            return
         if info.pointsTo:
             print(virtualpath, 'points to', info.pointsTo)
             virtualpath = info.pointsTo
@@ -634,6 +638,56 @@ class Vault:
         for it in dirs:
             subdir = join(root, it)
             yield from p.walk(subdir)
+
+    def glob(p, pathname, recursive=True):
+        "Expand wildcards in pathname returning a list"
+        #~ print('globbing', pathname)
+        base, pred = match(pathname)
+        x = p.getInfo(base)
+        if not x.exists: return []
+        if not x.isDir or not pred: return [pathname]
+
+        realpath = x.realDir
+        dirId = x.dirId
+        root = base
+        dirs = []
+        files = []
+        r = []
+        for it in os.scandir(realpath):
+            if it.name == 'dirid.c9r': continue
+            is_dir = it.is_dir()
+            if it.name.endswith('.c9s'): # deflated long name
+                # A c9s dir contains the original encrypted long name (name.c9s) and encrypted contents (contents.c9r)
+                ename = open(join(realpath, it.name, 'name.c9s')).read()
+                dname = p.decryptName(dirId.encode(), ename.encode()).decode()
+                if exists(join(realpath, it.name, 'contents.c9r')): is_dir = False
+            else:
+                dname = p.decryptName(dirId.encode(), it.name.encode()).decode()
+            sl = join(realpath, it.name, 'symlink.c9r')
+            if is_dir and exists(sl):
+                # Decrypt and look at symbolic link target
+                resolved = p.resolveSymlink(join(root, dname), sl)
+                is_dir = False
+            if pred:
+                #~ print('testing %s against %s' % (dname, pred[0]))
+                if not match(dname, pred[0]):
+                    #~ print('no match')
+                    continue
+                # intermediate predicate matches directories only
+                if not is_dir and len(pred) > 1:
+                    #~ print('is file')
+                    continue
+            if is_dir: dirs += [dname]
+            else: files += [dname]
+        pred = pred[1:]
+        if not pred:
+            #~ print('predicate exhausted, building result')
+            for it in dirs+files:
+                r += [join(root, it)]
+            return r
+        for it in dirs:
+            r += p.glob(join(root, it, *pred), recursive)
+        return r
 
 # AES utility functions
 
@@ -796,3 +850,28 @@ def ask_new_password():
             password = getpass.getpass('Please type the new password: ')
             check = getpass.getpass('Confirm the password: ')
     return password
+
+def match(s, p=None):
+    """Test wether a given string 's' matches a predicate 'p' or split the
+    predicate in two parts, without and with wildcards: origin and predicates list"""
+    if not s or s == '/': return ('/', [])
+    aa = s.split('/')
+    i = 0
+    if not p:
+        while i < len(aa):
+            if '*' in aa[i] or '?' in aa[i]: break
+            i+=1
+        #~ print('couple', aa[:i], aa[i:])
+        first = '/'.join(aa[:i])
+        second = aa[i:]
+        if not first: first = '/'
+        return first, second
+    bb = p.split('/')
+    while 1:
+        if i in (len(aa), len(bb)): break
+        if not fnmatch.fnmatch(aa[i], bb[i]):
+            #~ print ('fnmatch',aa,'against',bb,': does not match')
+            return 0
+        i+=1
+    #~ print ('fnmatch',aa,'against',bb,': matches')
+    return 1

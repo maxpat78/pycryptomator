@@ -1,11 +1,11 @@
-import cmd, sys, os
+import cmd, sys, os, glob
 from os.path import *
 from .cryptomator import *
 
 if os.name == 'nt':
-    from .w32lex import split # shlex ban \ in pathnames!
+    from .w32lex import split, join # shlex ban \ in pathnames!
 else:
-    from shlex import split
+    from shlex import split, join
 
 class CMShell(cmd.Cmd):
     intro = 'PyCryptomator Shell.  Type help or ? to list all available commands.'
@@ -19,8 +19,21 @@ class CMShell(cmd.Cmd):
     def preloop(p):
         p.prompt = '%s:> ' % p.vault.base
 
-    def do_debug(p, arg):
-        pass
+    def precmd(p, line):
+        #~ print('debug: cmdline=', line)
+        # shell wildcards expansion
+        argl = []
+        for arg in split(line):
+            if '?' in arg or '*' in arg:
+                if argl[0] == 'encrypt':
+                    argl += glob.glob(arg) # probably, we want globbing "real" pathnames
+                else:
+                    argl += p.vault.glob(arg)
+            else:
+                argl += [arg]
+        line = join(argl)
+        #~ print('debug: final cmdline=', line)
+        return line
 
     def do_quit(p, arg):
         'Quit the PyCryptomator Shell'
@@ -32,9 +45,10 @@ class CMShell(cmd.Cmd):
         if not argl:
             print('use: alias <virtual pathname>')
             return
-        i = p.vault.getInfo(argl[0])
-        print(i.realPathName)
-        
+        for it in argl:
+            i = p.vault.getInfo(it)
+            print(i.realPathName)
+
     def do_backup(p, arg):
         'Backup all the dir.c9r with their tree structure in a ZIP archive'
         argl = split(arg)
@@ -50,16 +64,18 @@ class CMShell(cmd.Cmd):
         if move: argl.remove('-m')
         force = '-f' in argl
         if force: argl.remove('-f')
-        if not argl or argl[0] == '-h' or len(argl) != 2:
-            print('use: decrypt [-m] [-f] <virtual_pathname_source> <real_pathname_destination>')
+        if not argl or argl[0] == '-h' or len(argl) < 2:
+            print('use: decrypt [-m] [-f] <virtual_pathname_source1...> <real_pathname_destination>')
             print('use: decrypt <virtual_pathname_source> -')
             return
         try:
-            is_dir = p.vault.getInfo(argl[0]).isDir
-            if is_dir: p.vault.decryptDir(argl[0], argl[1], force, move)
-            else:
-                p.vault.decryptFile(argl[0], argl[1], force, move)
-                if argl[1] == '-': print()
+            for it in argl[:-1]:
+                is_dir = p.vault.getInfo(it).isDir
+                if is_dir:
+                    p.vault.decryptDir(it, argl[-1], force, move)
+                else:
+                    p.vault.decryptFile(it, argl[-1], force, move)
+                    if argl[-1] == '-': print()
         except:
             print(sys.exception())
 
@@ -68,14 +84,15 @@ class CMShell(cmd.Cmd):
         argl = split(arg)
         move = '-m' in argl
         if move: argl.remove('-m')
-        if not argl or argl[0] == '-h' or len(argl) != 2:
-            print('use: encrypt [-m] <real_pathname_source> <virtual_pathname_destination>')
+        if not argl or argl[0] == '-h' or len(argl) < 2:
+            print('use: encrypt [-m] <real_pathname_source1...> <virtual_pathname_destination>')
             return
         try:
-            if isdir(argl[0]):
-                p.vault.encryptDir(argl[0], argl[1], move=move)
-            else:
-                p.vault.encryptFile(argl[0], argl[1], move=move)
+            for it in argl[:-1]:
+                if isdir(it):
+                    p.vault.encryptDir(it, argl[-1], move=move)
+                else:
+                    p.vault.encryptFile(it, argl[-1], move=move)
         except:
             print(sys.exception())
             
