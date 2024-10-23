@@ -7,6 +7,10 @@ if os.name == 'nt':
 else:
     from shlex import split, join
 
+
+class Options:
+    pass
+
 class CMShell(cmd.Cmd):
     intro = 'PyCryptomator Shell.  Type help or ? to list all available commands.'
     prompt = 'PCM:> '
@@ -98,19 +102,34 @@ class CMShell(cmd.Cmd):
             
     def do_ls(p, arg):
         'List files and directories'
+        o = Options()
         argl = split(arg)
-        recursive = '-r' in argl
-        if recursive: argl.remove('-r')
+        o.recursive = '-r' in argl
+        if o.recursive: argl.remove('-r')
+        o.banner = not '-b' in argl
+        if not o.banner: argl.remove('-b')
+        o.sorting = None
+        if '-s' in argl:
+            i = argl.index('-s')
+            o.sorting = argl[i+1]
+            if not o.sorting:
+                print('sorting method not specified')
+                return
+            for c in o.sorting:
+                if c not in 'NSDE-!':
+                    print('bad sorting method specified')
+                    return
+            argl.remove('-s')
+            argl.remove(o.sorting)
         if not argl: argl += ['/'] # implicit argument
         if argl[0] == '-h':
-            print('use: ls [-r] <virtual_path1> [...<virtual_pathN>]')
+            print('use: ls [-b] [-r] [-s NSDE-!] <virtual_path1> [...<virtual_pathN>]')
             return
-        for it in argl:
-            try:
-                p.vault.ls(it, recursive)
-            except:
-                pass
-        
+        try:
+            p.vault.ls(argl, o)
+        except:
+            print(sys.exception())
+
     def do_ln(p, arg):
         'Make a symbolic link to a file or directory'
         argl = split(arg)

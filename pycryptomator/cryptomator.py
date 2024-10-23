@@ -9,6 +9,8 @@ import getpass, hashlib, struct, base64
 import json, sys, io, os, operator
 import time, zipfile, locale, uuid, shutil, fnmatch
 from os.path import *
+from itertools import groupby
+from operator import itemgetter
 
 try:
     from Cryptodome.Cipher import AES
@@ -531,44 +533,96 @@ class Vault:
         if b.isDir:
             shutil.copy(b.dirC9, a.realPathName) # copy the original dir.c9r also
 
-    def ls(p, virtualpath, recursive=False):
-        "Print a list of contents of a virtual path"
+    def ls(p, pathnames, opts):
+        "List files and directories"
+        #~ print('DEBUG: ls called with %d args'%len(pathnames))
         def _realsize(n):
-            "Returns the decrypted file size"
+            "Return the decrypted file size"
             if n == 68: return 0 # header only
             cb = (n - 68 + (32768+28-1)) // (32768+28) # number of encrypted blocks
             size = n - 68 - (cb*28)
             if size < 0: size = 0 #symlinks
             return size
 
-        info = p.getInfo(virtualpath)
-        if info.pointsTo:
-            print(virtualpath, 'points to', info.pointsTo)
-            virtualpath = info.pointsTo
-        gtot_size, gtot_files, gtot_dirs = 0, 0, 0
-        for root, dirs, files in p.walk(virtualpath):
-            print('\n  Directory of', root, '\n')
-            tot_size = 0
-            for it in dirs:
-                full = join(root, it)
-                st = p.stat(full)
-                print('%12s  %s  %s' %('<DIR>', time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
-            for it in files:
-                full = join(root, it)
-                st = p.stat(full)
+        # [(root, name, is_file?, size, mtime, ext, symlink)]
+        results = []
+
+        # Phase 1: collect info about listed objects and build a table
+        for pathname in pathnames:
+            info = p.getInfo(pathname)
+            if not info.exists:
+                print(pathname, 'does not exist')
+                continue
+            if info.pointsTo:
+                print(pathname, 'points to', info.pointsTo)
+                pathname = info.pointsTo
+            # bypass walking if it isn't a directory
+            # works good with links?
+            if not info.isDir:
+                st = p.stat(pathname)
                 size = _realsize(st.st_size)
-                tot_size += size
-                info = p.getInfo(full)
-                if info.hasSym:
-                    print('%12s  %s  %s [--> %s]' %('<SYM>', time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it, info.pointsTo))
-                else:
-                    print('%12s  %s  %s' %(_fmt_size(size), time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime)), it))
-            print('\n%s bytes in %d files and %d directories.' % (_fmt_size(tot_size), len(files), len(dirs)))
-            gtot_size += tot_size
-            gtot_files += len(files)
-            gtot_dirs += len(dirs)
-            if not recursive: break
-        if recursive:
+                #~ info = p.getInfo(full)
+                results += [(dirname(pathname) or '/', basename(pathname), True, size, st.st_mtime, splitext(pathname)[1].lower(), info.pointsTo)]
+                continue
+            for root, dirs, files in p.walk(pathname):
+                for it in dirs:
+                    full = join(root, it)
+                    st = p.stat(full)
+                    results += [(root, it, False, 0, st.st_mtime, '', '')]
+                for it in files:
+                    full = join(root, it)
+                    st = p.stat(full)
+                    size = _realsize(st.st_size)
+                    info = p.getInfo(full)
+                    results += [(root, it, True, size, st.st_mtime, splitext(it)[1].lower(), info.pointsTo)]
+                if not opts.recursive: break
+        #~ print('ls_new collected', results)
+        # Phase 2: group by directory, and print (eventually sorted) results
+        gtot_size, gtot_files, gtot_dirs = 0, 0, 0
+        for group in groupby(results, lambda x: x[0]):
+            if opts.banner: print('\n  Directory of', group[0], '\n')
+            files = dirs = 0
+            tot_size = 0
+            G = list(group[1])
+            if opts.sorting:
+                # build a tuple suitable for itemgetter/key function
+                sort = []
+                sort_reverse = 0
+                sort_dirfirst = 0
+                for c in opts.sorting:
+                    if c == '-':
+                        sort_reverse = 1
+                        continue
+                    if c == '!':
+                        sort_dirfirst = 1
+                        continue
+                    sort += [{'N':1,'S':3,'D':4,'E':5}[c]]
+                if sort_dirfirst: sort.insert(0, 2)
+                sort = tuple(sort)
+                #~ print('DEBUG: sort tuple', sort)
+                #~ print('DEBUG: unsorted list', G)
+                if G: G = sorted(G, key=itemgetter(*sort), reverse=sort_reverse)
+                #~ print('DEBUG: sorted list', G)
+            if not opts.banner:
+                for r in G:
+                    print(r[1])
+            else:
+                for r in G:
+                    if not r[2]:
+                        dirs += 1
+                        print('%12s  %s  %s' %('<DIR>', time.strftime('%Y-%m-%d %H:%M', time.localtime(r[4])), r[1]))
+                    else:
+                        files += 1
+                        tot_size += size
+                        if r[6]:
+                            print('%12s  %s  %s [--> %s]' %('<SYM>', time.strftime('%Y-%m-%d %H:%M', time.localtime(r[4])), r[1], r[6]))
+                        else:
+                            print('%12s  %s  %s' %(_fmt_size(r[3]), time.strftime('%Y-%m-%d %H:%M', time.localtime(r[4])), r[1]))
+                if opts.banner: print('\n%s bytes in %d files and %d directories.' % (_fmt_size(tot_size), files, dirs))
+                gtot_size += tot_size
+                gtot_files += files
+                gtot_dirs += dirs
+        if opts.recursive and opts.banner:
             print('\n   Total files listed:\n%s bytes in %s files and %s directories.' % (_fmt_size(gtot_size), _fmt_size(gtot_files), _fmt_size(gtot_dirs)))
 
     def mv(p, src, dst):
@@ -611,42 +665,32 @@ class Vault:
     # os.walk by default does not follow dir links
     def walk(p, virtualpath):
         "Traverse the virtual file system like os.walk"
-        x = p.getInfo(virtualpath)
-        realpath = x.realDir
-        dirId = x.dirId
-        root = virtualpath
-        dirs = []
-        files = []
-        for it in os.scandir(realpath):
-            if it.name == 'dirid.c9r': continue
-            is_dir = it.is_dir()
-            if it.name.endswith('.c9s'): # deflated long name
-                # A c9s dir contains the original encrypted long name (name.c9s) and encrypted contents (contents.c9r)
-                ename = open(join(realpath, it.name, 'name.c9s')).read()
-                dname = p.decryptName(dirId.encode(), ename.encode()).decode()
-                if exists(join(realpath, it.name, 'contents.c9r')): is_dir = False
-            else:
-                dname = p.decryptName(dirId.encode(), it.name.encode()).decode()
-            sl = join(realpath, it.name, 'symlink.c9r')
-            if is_dir and exists(sl):
-                # Decrypt and look at symbolic link target
-                resolved = p.resolveSymlink(join(root, dname), sl)
-                is_dir = False
-            if is_dir: dirs += [dname]
-            else: files += [dname]
-        yield root, dirs, files
-        for it in dirs:
-            subdir = join(root, it)
-            yield from p.walk(subdir)
+        yield from p._walker(virtualpath, mode='walk')
 
-    def glob(p, pathname, recursive=True):
+    def glob(p, pathname):
         "Expand wildcards in pathname returning a list"
-        #~ print('globbing', pathname)
+        return [x for x in p._walker(pathname, mode='glob')]
+
+    def iglob(p, pathname):
+        "Expand wildcards in pathname returning a generator"
+        yield from p._walker(pathname, mode='glob')
+
+    def _walker(p, pathname, mode='walk'):
         base, pred = match(pathname)
         x = p.getInfo(base)
-        if not x.exists: return []
-        if not x.isDir or not pred: return [pathname]
-
+        if not pred:
+            if not x.exists or not x.isDir:
+                # pred becomes the exact name
+                base, pred = dirname(pathname) or '/', [basename(pathname)]
+                x = p.getInfo(base)
+        #~ print('debug: pathname, base, pred',pathname, base, pred)
+        #~ if mode == 'glob':
+            #~ if not x.exists:
+                #~ yield ''
+                #~ return
+            #~ if not x.isDir or base == pred:
+                #~ yield pathname
+                #~ return
         realpath = x.realDir
         dirId = x.dirId
         root = base
@@ -679,15 +723,21 @@ class Vault:
                     continue
             if is_dir: dirs += [dname]
             else: files += [dname]
-        pred = pred[1:]
-        if not pred:
-            #~ print('predicate exhausted, building result')
-            for it in dirs+files:
-                r += [join(root, it)]
-            return r
-        for it in dirs:
-            r += p.glob(join(root, it, *pred), recursive)
-        return r
+        if mode == 'walk':
+            yield root, dirs, files
+            for it in dirs:
+                subdir = join(root, it)
+                yield from p.walk(subdir)
+        else:
+            pred = pred[1:]
+            if not pred:
+                #~ print('predicate exhausted, building result')
+                for it in dirs+files:
+                    yield join(root, it)
+                return
+            for it in dirs:
+                yield from p.iglob(join(root, it, *pred))
+
 
 # AES utility functions
 
