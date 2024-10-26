@@ -52,7 +52,7 @@ alias    show the real pathname linked to a virtual one
 backup   backup the Directory IDs (required to decrypt names) in a ZIP file
 ```
 
-If no operation is specified, an interactive shell is launched on open vault.
+If no operation is specified, an interactive shell is launched on open vault. It can do transparent wildcards expansion (`*` and `?` only).
 
 Functionality was tested in Windows 11 and Ubuntu 22.04 LTS Linux (under Windows WSL).
 

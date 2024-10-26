@@ -6,7 +6,7 @@
 
 """
 import getpass, hashlib, struct, base64
-import json, sys, io, os, operator
+import json, sys, io, os, operator, re
 import time, zipfile, locale, uuid, shutil, fnmatch
 from os.path import *
 from itertools import groupby
@@ -527,11 +527,12 @@ class Vault:
         a = p.getInfo(symlink)
         if not exists(a.realPathName): os.mkdir(a.realPathName)
         out = open(join(a.realPathName, 'symlink.c9r'), 'wb')
+        if os.name == 'nt' and target[0] == '/':
+            target = calc_rel_path(target, symlink)
+            print("warning: absolute target pathname won't work with Windows")
+            print("relative conversion supplied:", target)
         Vault._encryptf(p.pk, io.BytesIO(target.encode()), out) # does not check target existance
         out.close()
-        b = p.getInfo(target)
-        if b.isDir:
-            shutil.copy(b.dirC9, a.realPathName) # copy the original dir.c9r also
 
     def ls(p, pathnames, opts):
         "List files and directories"
@@ -925,3 +926,20 @@ def match(s, p=None):
         i+=1
     #~ print ('fnmatch',aa,'against',bb,': matches')
     return 1
+
+def calc_rel_path(base, child):
+    "returns the path of base relative to child"
+    base_parts = re.split(r'[\\/]+', abspath(base))
+    child_parts = re.split(r'[\\/]+', abspath(child))
+    # strips common subpath, if any
+    i=0
+    while base_parts[i] == child_parts[i]: i += 1
+    # returns base if they don't share anything
+    if not i: return base
+    n = len(child_parts) - 1 - i # counts path separators
+    relpath = ''
+    while n:
+        relpath += '../'
+        n -= 1
+    relpath += '/'.join(base_parts[i:])
+    return relpath
