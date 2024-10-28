@@ -214,7 +214,7 @@ class CMShell(cmd.Cmd):
         force = '-f' in argl
         if force: argl.remove('-f')
         if not argl or argl[0] == '-h':
-            print('use: rm <file1|dir1> [...<fileN|dirN>]')
+            print('use: rm [-f] <file1|dir1> [...<fileN|dirN>]')
             return
         for it in argl:
             if it == '/':

@@ -41,6 +41,7 @@ from standard input.
 After the `vault_name`, you can specify some useful operations like:
 
 ```
+cd       change vault's current directory
 ls       list unecrypted vault contents (with size and time)
 mkdir    create a new directory/tree in the vault
 mv       move or rename files and directories
@@ -60,3 +61,64 @@ It's pure Python 3, with pycryptodome addon.
 
 MIT licensed.
 Absolutely no warranty!
+
+
+# Internal commands
+
+`*` and `?` wildcards can be specified on command line to enable automatic shell expansion.
+
+
+`alias <pathname>`
+show the real base64 (encrypted and obfuscated) pathname corresponding to the
+vault's <pathname>
+
+`backup <archive.zip>`
+make in archive.zip a backup of all the directory id files dir.c9r
+encountered in the vault tree: they are required to reconstruct original file
+names
+
+`cd <directory>`
+make the specified vault's directory the current one in the pycryptomator
+internal shell
+
+```
+decrypt [-m] [-f] <virtual_pathname_source1...> <real_pathname_destination>
+decrypt <virtual_pathname_source> -
+```
+decrypt one or more files and/or directories to the specified destination in the
+real file system. Option `-f` forces to overwrite existing files, `-m` moves 
+(i.e. deletes) the source files after decryption. With `-` as destination, a
+file is decrypted and printed to standard output.
+
+`encrypt [-m] <real_pathname_source1...> <virtual_pathname_destination>`
+encrypt one or more files and/or directories to the specified destination. If
+the destination is a directory, it must exist. `-m` moves (i.e. deletes) the
+source files after encryption.
+
+`ln <target> <link>`
+make a symbolic link <link> to a <target> file or directory in the vault.
+It does not check for <target> existence.
+An absolute <target> should be avoided, since it prevents portability
+(i.e. to Windows).
+
+`ls [-b] [-r] [-s NSDE-!] <virtual_path1> [...<virtual_pathN>]`
+list files and directories with minimal informations like DOS DIR (type/size,
+write time, name, symbolic link target).
+`-b` prints bare names
+`-r` traverses specified directories recursively
+`-s` sorts results by one or more criteria: `N`ame, `S`ize, `D`ate, `E`xtension
+(a.k.a. file type), `-` sorts in reverse order and `!` puts directories first.
+
+`mkdir <dir1> [...<dirN>]`
+make one or more directories or directory trees (i.e. intermediate directories
+get created) in the vault.
+
+`mv <source> [<source2>...<sourceN>] <destination>`
+rename or move files and directories. If more files or directories are specified,
+<destination> must be an existing directory and objects are moved inside it;
+else, if <destination> does not exist, it renames the file or directory.
+
+`rm [-f] <file1|dir1> [...<fileN|dirN>]`
+remove files and directories. Root directory is protected against accidental
+deletion. If a directory is not empty, `-f` switch is required to force its
+removal.
