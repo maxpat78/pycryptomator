@@ -70,7 +70,7 @@ Absolutely no warranty!
 
 `alias <pathname>`
 show the real base64 (encrypted and obfuscated) pathname corresponding to the
-vault's <pathname>
+vault's pathname
 
 `backup <archive.zip>`
 make in archive.zip a backup of all the directory id files dir.c9r
@@ -96,9 +96,9 @@ the destination is a directory, it must exist. `-m` moves (i.e. deletes) the
 source files after encryption.
 
 `ln <target> <link>`
-make a symbolic link <link> to a <target> file or directory in the vault.
-It does not check for <target> existence.
-An absolute <target> should be avoided, since it prevents portability
+make a symbolic link to a target file or directory in the vault.
+It does not check for target existence.
+An absolute target should be avoided, since it prevents portability
 (i.e. to Windows).
 
 `ls [-b] [-r] [-s NSDE-!] <virtual_path1> [...<virtual_pathN>]`
@@ -115,8 +115,8 @@ get created) in the vault.
 
 `mv <source> [<source2>...<sourceN>] <destination>`
 rename or move files and directories. If more files or directories are specified,
-<destination> must be an existing directory and objects are moved inside it;
-else, if <destination> does not exist, it renames the file or directory.
+destination must be an existing directory and objects are moved inside it;
+else, if destination does not exist, it renames the file or directory.
 
 `rm [-f] <file1|dir1> [...<fileN|dirN>]`
 remove files and directories. Root directory is protected against accidental
