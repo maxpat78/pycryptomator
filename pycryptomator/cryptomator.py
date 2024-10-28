@@ -229,7 +229,11 @@ class Vault:
     def resolveSymlink(p, virtualpath, symlink):
         src = open(symlink, 'rb')
         sl = io.BytesIO()
-        Vault._decryptf(p.pk, src, sl)
+        try:
+            Vault._decryptf(p.pk, src, sl)
+        except:
+            print("Corrupted symbolic link file")
+            return (symlink, symlink)
         sl.seek(0)
         symlink = target = sl.read().decode()
         if target[0] != '/':
@@ -357,6 +361,10 @@ class Vault:
             else:
                 if exists(dest) and not force:
                     raise BaseException('destination file "%s" exists and won\'t get overwritten!'%dest)
+                # creates destination tree if necessary
+                bn = dirname(dest)
+                if not exists(bn):
+                    os.makedirs(bn)
                 out = open(dest, 'wb')
 
         Vault._decryptf(p.pk, f, out)
@@ -371,7 +379,7 @@ class Vault:
                 p.remove(info.pathname)
         return st.st_size
     
-    def decryptDir(p, virtualpath, dest, force=False, move=False):
+    def decryptDir(p, virtualpath, dest, force=False, move=False, root_dir=None):
         if (virtualpath[0] != '/'):
             raise BaseException('the vault path to decrypt must be absolute!')
         x = p.getInfo(virtualpath)
@@ -385,7 +393,9 @@ class Vault:
             nn+=1
             for it in files+dirs:
                 fn = join(root, it)
-                dn = join(dest, fn[1:]) # target pathname
+                #~ if root_dir:
+                dn = join(dest, stripr(fn, root_dir)) # target pathname
+                #~ dn = join(dest, fn[1:]) # target pathname
                 bn = dirname(dn) # target base dir
                 if not exists(bn):
                     os.makedirs(bn)
@@ -668,9 +678,16 @@ class Vault:
         "Traverse the virtual file system like os.walk"
         yield from p._walker(virtualpath, mode='walk')
 
-    def glob(p, pathname):
+    def glob(p, pathname, root_dir=None):
         "Expand wildcards in pathname returning a list"
-        return [x for x in p._walker(pathname, mode='glob')]
+        if root_dir:
+            L = []
+            pathname = join(root_dir, pathname)
+            for x in p._walker(pathname, mode='glob'):
+                L +=[stripr(x, root_dir)]
+            return L
+        else:
+            return [x for x in p._walker(pathname, mode='glob')]
 
     def iglob(p, pathname):
         "Expand wildcards in pathname returning a generator"
@@ -684,14 +701,6 @@ class Vault:
                 # pred becomes the exact name
                 base, pred = dirname(pathname) or '/', [basename(pathname)]
                 x = p.getInfo(base)
-        #~ print('debug: pathname, base, pred',pathname, base, pred)
-        #~ if mode == 'glob':
-            #~ if not x.exists:
-                #~ yield ''
-                #~ return
-            #~ if not x.isDir or base == pred:
-                #~ yield pathname
-                #~ return
         realpath = x.realDir
         dirId = x.dirId
         root = base
@@ -714,13 +723,10 @@ class Vault:
                 resolved = p.resolveSymlink(join(root, dname), sl)
                 is_dir = False
             if pred:
-                #~ print('testing %s against %s' % (dname, pred[0]))
                 if not match(dname, pred[0]):
-                    #~ print('no match')
                     continue
                 # intermediate predicate matches directories only
                 if not is_dir and len(pred) > 1:
-                    #~ print('is file')
                     continue
             if is_dir: dirs += [dname]
             else: files += [dname]
@@ -732,7 +738,6 @@ class Vault:
         else:
             pred = pred[1:]
             if not pred:
-                #~ print('predicate exhausted, building result')
                 for it in dirs+files:
                     yield join(root, it)
                 return
@@ -921,11 +926,15 @@ def match(s, p=None):
     while 1:
         if i in (len(aa), len(bb)): break
         if not fnmatch.fnmatch(aa[i], bb[i]):
-            #~ print ('fnmatch',aa,'against',bb,': does not match')
             return 0
         i+=1
-    #~ print ('fnmatch',aa,'against',bb,': matches')
     return 1
+
+def stripr(pathname, root):
+    "Strip 'root' directory from 'pathname'"
+    i = len(root)
+    if root[-1] != '/': i+=1
+    return pathname[i:]
 
 def calc_rel_path(base, child):
     "returns the path of base relative to child"

@@ -1,4 +1,5 @@
-import cmd, sys, os, glob
+import cmd, sys, os
+from glob import glob as sysglob
 from os.path import *
 from .cryptomator import *
 
@@ -6,6 +7,7 @@ if os.name == 'nt':
     from .w32lex import split, join # shlex ban \ in pathnames!
 else:
     from shlex import split, join
+
 
 
 class Options:
@@ -16,12 +18,15 @@ class CMShell(cmd.Cmd):
     prompt = 'PCM:> '
     vault = None
 
+    def _join(*args): return os.path.join(*args).replace('\\','/')
+
     def __init__ (p, vault):
         p.vault = vault
+        p.cd = '/' # vault's root is default current directory
         super(CMShell, p).__init__()
 
     def preloop(p):
-        p.prompt = '%s:> ' % p.vault.base
+        p.prompt = ':%s$ ' % p.cd
 
     def precmd(p, line):
         #~ print('debug: cmdline=', line)
@@ -30,14 +35,26 @@ class CMShell(cmd.Cmd):
         for arg in split(line):
             if '?' in arg or '*' in arg:
                 if argl[0] == 'encrypt':
-                    argl += glob.glob(arg) # probably, we want globbing "real" pathnames
+                    argl += sysglob(arg) # probably, we want globbing "real" pathnames
                 else:
-                    argl += p.vault.glob(arg)
+                    argl += p.vault.glob(arg, root_dir=p.cd)
             else:
                 argl += [arg]
         line = join(argl)
         #~ print('debug: final cmdline=', line)
         return line
+
+    def postcmd(p, stop, line):
+        p.prompt = ':%s$ ' % p.cd
+        return stop
+
+    def _prep_cd(p, arg):
+        narg = arg
+        if arg and arg[0] != '/':
+            if arg == '.': return p.cd
+            narg = CMShell._join(p.cd, arg)
+            narg = os.path.normpath(narg).replace('\\','/')
+        return narg
 
     def do_quit(p, arg):
         'Quit the PyCryptomator Shell'
@@ -50,7 +67,7 @@ class CMShell(cmd.Cmd):
             print('use: alias <virtual pathname>')
             return
         for it in argl:
-            i = p.vault.getInfo(it)
+            i = p.vault.getInfo(p._prep_cd(it))
             print(i.realPathName)
 
     def do_backup(p, arg):
@@ -60,7 +77,20 @@ class CMShell(cmd.Cmd):
             print('use: backup <ZIP archive>')
             return
         backupDirIds(p.vault.base, argl[0])
-        
+    
+    def do_cd(p, arg):
+        'Change current vault directory'
+        argl = split(arg)
+        if not argl or len(argl) > 1:
+            print('Use: cd <directory>')
+            return
+        narg = p._prep_cd(argl[0])
+        x = p.vault.getInfo(narg)
+        if not x.isDir:
+            print(narg, 'is not a directory')
+            return
+        p.cd = narg
+
     def do_decrypt(p, arg):
         'Decrypt files or directories from the vault'
         argl = split(arg)
@@ -74,11 +104,18 @@ class CMShell(cmd.Cmd):
             return
         try:
             for it in argl[:-1]:
-                is_dir = p.vault.getInfo(it).isDir
+                is_dir = p.vault.getInfo(p._prep_cd(it)).isDir
                 if is_dir:
-                    p.vault.decryptDir(it, argl[-1], force, move)
+                    p.vault.decryptDir(p._prep_cd(it), argl[-1], force, move, root_dir=p.cd)
                 else:
-                    p.vault.decryptFile(it, argl[-1], force, move)
+                    dest = argl[-1]
+                    if len(argl) > 2:
+                        if not os.path.isdir(dest):
+                            print('Destination directory %s does not exist!' % dest)
+                            return
+                        dest = CMShell._join(dest, it)
+                        print(dest)
+                    p.vault.decryptFile(p._prep_cd(it), dest, force, move)
                     if argl[-1] == '-': print()
         except:
             print(sys.exception())
@@ -94,9 +131,17 @@ class CMShell(cmd.Cmd):
         try:
             for it in argl[:-1]:
                 if isdir(it):
-                    p.vault.encryptDir(it, argl[-1], move=move)
+                    p.vault.encryptDir(it, p._prep_cd(argl[-1]), move=move)
                 else:
-                    p.vault.encryptFile(it, argl[-1], move=move)
+                    dest = p._prep_cd(argl[-1])
+                    if len(argl) > 2:
+                        x = p.vault.getInfo(dest)
+                        if not x.isDir:
+                            print('Destination directory %s does not exist!' % dest)
+                            return
+                        dest = CMShell._join(dest, it)
+                        print(dest)
+                    p.vault.encryptFile(it, dest, move=move)
         except:
             print(sys.exception())
             
@@ -121,11 +166,12 @@ class CMShell(cmd.Cmd):
                     return
             argl.remove('-s')
             argl.remove(o.sorting)
-        if not argl: argl += ['/'] # implicit argument
+        if not argl: argl += [p.cd] # current directory is the implicit argument
         if argl[0] == '-h':
             print('use: ls [-b] [-r] [-s NSDE-!] <virtual_path1> [...<virtual_pathN>]')
             return
         try:
+            argl = list(map(lambda x:p._prep_cd(x), argl))
             p.vault.ls(argl, o)
         except:
             print(sys.exception())
@@ -149,7 +195,7 @@ class CMShell(cmd.Cmd):
             return
         for it in argl:
             try:
-                p.vault.mkdir(it)
+                p.vault.mkdir(p._prep_cd(it))
             except:
                 print(sys.exception())
 
@@ -160,7 +206,7 @@ class CMShell(cmd.Cmd):
             print('please use: mv <source> [<source2>...<sourceN>] <destination>')
             return
         for it in argl[:-1]:
-            p.vault.mv(it, argl[-1])
+            p.vault.mv(p._prep_cd(it), p._prep_cd(argl[-1]))
 
     def do_rm(p, arg):
         'Remove files and directories'
@@ -175,13 +221,14 @@ class CMShell(cmd.Cmd):
                 print("Won't erase root directory.")
                 return
             try:
-                i = p.vault.getInfo(it)
+                narg = p._prep_cd(it)
+                i = p.vault.getInfo(narg)
                 if not i.isDir:
-                    p.vault.remove(it) # del file
+                    p.vault.remove(narg) # del file
                     continue
                 if force:
-                    p.vault.rmtree(it) # del dir, even if nonempty
+                    p.vault.rmtree(narg) # del dir, even if nonempty
                     continue
-                p.vault.rmdir(it) # del empty dir
+                p.vault.rmdir(narg) # del empty dir
             except:
                 print(sys.exception())

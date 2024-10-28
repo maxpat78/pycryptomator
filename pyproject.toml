@@ -29,6 +29,9 @@ dependencies = [
 "Homepage" = "https://github.com/maxpat78/pycryptomator"
 "Source" = "https://github.com/maxpat78/pycryptomator"
 
+[project.scripts]
+pycryptomator = "pycryptomator:__main__"
+
 [tool.setuptools]
 packages = ["pycryptomator", "pycryptomator.w32lex"]
 package-data = {"pycryptomator" = ["*.txt"]}
