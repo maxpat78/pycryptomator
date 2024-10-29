@@ -98,8 +98,10 @@ class CMShell(cmd.Cmd):
         if move: argl.remove('-m')
         force = '-f' in argl
         if force: argl.remove('-f')
+        fulltree = '-F' in argl
+        if fulltree: argl.remove('-F')
         if not argl or argl[0] == '-h' or len(argl) < 2:
-            print('use: decrypt [-m] [-f] <virtual_pathname_source1...> <real_pathname_destination>')
+            print('use: decrypt [-fmF] <virtual_pathname_source1...> <real_pathname_destination>')
             print('use: decrypt <virtual_pathname_source> -')
             return
         try:
@@ -110,40 +112,57 @@ class CMShell(cmd.Cmd):
                 else:
                     dest = argl[-1]
                     if len(argl) > 2:
-                        if not os.path.isdir(dest):
-                            print('Destination directory %s does not exist!' % dest)
+                        if os.path.exists(dest) and not os.path.isdir(dest):
+                            print('Destination %s exists and is not a directory!' % dest)
                             return
-                        dest = CMShell._join(dest, it)
-                        print(dest)
+                        # else it will be created
+                        if fulltree:
+                            dest = CMShell._join(dest, it)
+                        else:
+                            dest = CMShell._join(dest, basename(it))
+                    print(dest)
                     p.vault.decryptFile(p._prep_cd(it), dest, force, move)
                     if argl[-1] == '-': print()
         except:
             print(sys.exception())
+            #~ import traceback; print(traceback.format_exc())
 
     def do_encrypt(p, arg):
         'Encrypt files or directories into the vault, eventually moving them'
         argl = split(arg)
         move = '-m' in argl
         if move: argl.remove('-m')
+        force = '-f' in argl
+        if force: argl.remove('-f')
+        fulltree = '-F' in argl
+        if fulltree: argl.remove('-F')
         if not argl or argl[0] == '-h' or len(argl) < 2:
-            print('use: encrypt [-m] <real_pathname_source1...> <virtual_pathname_destination>')
+            print('use: encrypt [-Ffm] <real_pathname_source1...> <virtual_pathname_destination>')
             return
         try:
             for it in argl[:-1]:
+                dest = p._prep_cd(argl[-1])
                 if isdir(it):
-                    p.vault.encryptDir(it, p._prep_cd(argl[-1]), move=move)
+                    p.vault.encryptDir(it, dest, force, move)
                 else:
-                    dest = p._prep_cd(argl[-1])
+                    x = p.vault.getInfo(dest)
+                    # In many-to-one, one must exist as dir, or not exist
                     if len(argl) > 2:
-                        x = p.vault.getInfo(dest)
-                        if not x.isDir:
-                            print('Destination directory %s does not exist!' % dest)
+                        if x.exists and not x.isDir:
+                            print('Destination %s exists and is not a directory!' % dest)
                             return
-                        dest = CMShell._join(dest, it)
-                        print(dest)
-                    p.vault.encryptFile(it, dest, move=move)
+                        if not x.exists: # dir will be created
+                            x.isDir = 1
+                    if x.isDir:
+                        if fulltree:
+                            dest = CMShell._join(dest, it)
+                        else:
+                            dest = CMShell._join(dest, basename(it))
+                    print(dest)
+                    p.vault.encryptFile(it, dest, force, move)
         except:
             print(sys.exception())
+            #~ import traceback; print(traceback.format_exc())
             
     def do_ls(p, arg):
         'List files and directories'
@@ -190,12 +209,17 @@ class CMShell(cmd.Cmd):
     def do_mkdir(p, arg):
         'Make a directory or directory tree'
         argl = split(arg)
+        realfs = '-R' in argl
+        if realfs: argl.remove('-R')
         if not argl or argl[0] == '-h':
-            print('use: mkdir <dir1> [...<dirN>]')
+            print('use: mkdir [-R] <dir1> [...<dirN>]')
             return
         for it in argl:
             try:
-                p.vault.mkdir(p._prep_cd(it))
+                if realfs:
+                    os.makedirs(it)
+                else:
+                    p.vault.mkdir(p._prep_cd(it))
             except:
                 print(sys.exception())
 
@@ -206,7 +230,10 @@ class CMShell(cmd.Cmd):
             print('please use: mv <source> [<source2>...<sourceN>] <destination>')
             return
         for it in argl[:-1]:
-            p.vault.mv(p._prep_cd(it), p._prep_cd(argl[-1]))
+            try:
+                p.vault.mv(p._prep_cd(it), p._prep_cd(argl[-1]))
+            except:
+                print(sys.exception())
 
     def do_rm(p, arg):
         'Remove files and directories'

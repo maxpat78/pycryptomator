@@ -82,18 +82,23 @@ make the specified vault's directory the current one in the pycryptomator
 internal shell
 
 ```
-decrypt [-m] [-f] <virtual_pathname_source1...> <real_pathname_destination>
+decrypt [-fmF] <virtual_pathname_source1...> <real_pathname_destination>
 decrypt <virtual_pathname_source> -
 ```
 decrypt one or more files and/or directories to the specified destination in the
-real file system. Option `-f` forces to overwrite existing files, `-m` moves 
-(i.e. deletes) the source files after decryption. With `-` as destination, a
-file is decrypted and printed to standard output.
+real file system.
+`-f` forces to overwrite existing files, `-m` moves (i.e. deletes) the source
+files after decryption, `-F` replicates the full command line path of source
+in destination (by default only filenames are copied).
+With `-` as destination, a file is decrypted and printed to standard output.
 
-`encrypt [-m] <real_pathname_source1...> <virtual_pathname_destination>`
-encrypt one or more files and/or directories to the specified destination. If
-the destination is a directory, it must exist. `-m` moves (i.e. deletes) the
-source files after encryption.
+`encrypt [-fmF] <real_pathname_source1...> <virtual_pathname_destination>`
+encrypt one or more files and/or directories to the specified destination.
+If multiple sources are specified, the destination directory will be created
+if not existent.
+`-f` forces to overwrite existing files, `-m` moves (i.e. deletes) the source
+files after encryption, `-F` replicates the full command line path of source
+in destination (by default only filenames are copied).
 
 `ln <target> <link>`
 make a symbolic link to a target file or directory in the vault.
@@ -109,9 +114,9 @@ write time, name, symbolic link target).
 `-s` sorts results by one or more criteria: `N`ame, `S`ize, `D`ate, `E`xtension
 (a.k.a. file type), `-` sorts in reverse order and `!` puts directories first.
 
-`mkdir <dir1> [...<dirN>]`
+`mkdir [-R] <dir1> [...<dirN>]`
 make one or more directories or directory trees (i.e. intermediate directories
-get created) in the vault.
+get created) in the vault or in the real file system if `-R` is specified.
 
 `mv <source> [<source2>...<sourceN>] <destination>`
 rename or move files and directories. If more files or directories are specified,

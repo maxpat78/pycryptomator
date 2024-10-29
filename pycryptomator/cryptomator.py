@@ -149,6 +149,8 @@ class Vault:
 
     def encryptName(p, dirId, name):
         "Encrypt a name contained in a given directory"
+        i = check_name(name)
+        if i: raise BaseException('''Illegal character '%s' in "%s"''' % (chr(name[i-1]), name.decode()))
         dirIdE = aes_siv_encrypt(p.pk, p.hk, name, dirId)
         # concatenated 128-bit digest and encrypted name
         return base64.urlsafe_b64encode(dirIdE) + b'.c9r'
@@ -275,6 +277,9 @@ class Vault:
             if not exists(src):
                 raise BaseException('Source file does not exist: '+src)
             f = open(src, 'rb')
+        x = p.getInfo(virtualpath)
+        if x.exists and not force:
+            raise BaseException('destination file "%s" exists and won\'t get overwritten!'%virtualpath)
         if not basename(virtualpath).endswith('dirid.c9r'):
             rp = p.create(virtualpath)
         else:
@@ -351,7 +356,7 @@ class Vault:
         info = p.getInfo(virtualpath)
         while info.pointsTo:
             info = p.getInfo(info.pointsTo)
-        rp = info.realPathName
+        rp = info.contentsC9
         f = open(rp, 'rb')
         if hasattr(dest, 'write'): # if it's file
             out = dest
@@ -952,3 +957,16 @@ def calc_rel_path(base, child):
         n -= 1
     relpath += '/'.join(base_parts[i:])
     return relpath
+
+def check_name(name):
+    if os.name == 'nt':
+        illegal_chars = b'\x00<>:"/\\|?*'
+    else:
+        illegal_chars = b'\x00/'
+    i = 0
+    while i < len(name):
+        c = name[i]
+        i += 1
+        if c in illegal_chars: return i
+        if os.name == 'nt' and c in b' .' and i+1 == len(name): return i
+    return 0
