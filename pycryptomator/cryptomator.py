@@ -363,7 +363,7 @@ class Vault:
                     raise BaseException('destination file "%s" exists and won\'t get overwritten!'%dest)
                 # creates destination tree if necessary
                 bn = dirname(dest)
-                if not exists(bn):
+                if bn and not exists(bn):
                     os.makedirs(bn)
                 out = open(dest, 'wb')
 
@@ -397,7 +397,7 @@ class Vault:
                 dn = join(dest, stripr(fn, root_dir)) # target pathname
                 #~ dn = join(dest, fn[1:]) # target pathname
                 bn = dirname(dn) # target base dir
-                if not exists(bn):
+                if bn and not exists(bn):
                     os.makedirs(bn)
                 if it in files:
                     total_bytes += p.decryptFile(fn, dn, force, move)

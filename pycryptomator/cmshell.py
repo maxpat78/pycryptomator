@@ -183,7 +183,7 @@ class CMShell(cmd.Cmd):
             print('use: ln <target_virtual_pathname> <symbolic_link_virtual_pathname>')
             return
         try:
-            p.vault.ln(argl[0], argl[1])
+            p.vault.ln(argl[0], p._prep_cd(argl[1]))
         except:
             print(sys.exception())
 
