@@ -1,6 +1,6 @@
 # pycryptomator
 
-A Python 3 package to access a [Cryptomator](https://github.com/cryptomator/cryptomator) [V8] (https://docs.cryptomator.org/en/1.7/security/architecture/) vault and carry on some useful operations.
+A Python 3 package to access a [Cryptomator](https://github.com/cryptomator/cryptomator) [V8](https://docs.cryptomator.org/en/1.7/security/architecture) vault and carry on some useful operations.
 
 ```
 usage: pycryptomator  [-h] [--init] [--print-keys [{a85,b64,words}]] [--master-keys PRIMARY_KEY HMAC_KEY]
