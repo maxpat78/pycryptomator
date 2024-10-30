@@ -1,4 +1,4 @@
-import cmd, sys, os
+import cmd, sys, os, traceback
 from glob import glob as sysglob
 from os.path import *
 from .cryptomator import *
@@ -124,8 +124,7 @@ class CMShell(cmd.Cmd):
                     p.vault.decryptFile(p._prep_cd(it), dest, force, move)
                     if argl[-1] == '-': print()
         except:
-            print(sys.exception())
-            #~ import traceback; print(traceback.format_exc())
+            perr()
 
     def do_encrypt(p, arg):
         'Encrypt files or directories into the vault, eventually moving them'
@@ -161,8 +160,7 @@ class CMShell(cmd.Cmd):
                     print(dest)
                     p.vault.encryptFile(it, dest, force, move)
         except:
-            print(sys.exception())
-            #~ import traceback; print(traceback.format_exc())
+            perr()
             
     def do_ls(p, arg):
         'List files and directories'
@@ -193,7 +191,7 @@ class CMShell(cmd.Cmd):
             argl = list(map(lambda x:p._prep_cd(x), argl))
             p.vault.ls(argl, o)
         except:
-            print(sys.exception())
+            perr()
 
     def do_ln(p, arg):
         'Make a symbolic link to a file or directory'
@@ -204,7 +202,7 @@ class CMShell(cmd.Cmd):
         try:
             p.vault.ln(argl[0], p._prep_cd(argl[1]))
         except:
-            print(sys.exception())
+            perr()
 
     def do_mkdir(p, arg):
         'Make a directory or directory tree'
@@ -221,7 +219,7 @@ class CMShell(cmd.Cmd):
                 else:
                     p.vault.mkdir(p._prep_cd(it))
             except:
-                print(sys.exception())
+                perr()
 
     def do_mv(p, arg):
         'Move or rename files or directories'
@@ -233,7 +231,7 @@ class CMShell(cmd.Cmd):
             try:
                 p.vault.mv(p._prep_cd(it), p._prep_cd(argl[-1]))
             except:
-                print(sys.exception())
+                perr()
 
     def do_rm(p, arg):
         'Remove files and directories'
@@ -258,4 +256,9 @@ class CMShell(cmd.Cmd):
                     continue
                 p.vault.rmdir(narg) # del empty dir
             except:
-                print(sys.exception())
+                perr()
+
+
+def perr():
+    print(sys.exception())
+    #~ print(traceback.format_exc())

@@ -60,6 +60,10 @@ class PathInfo():
         if not p.isDir: return ''
         return join(p.realPathName, 'dir.c9r')
 
+    @property
+    def symC9(p):
+        return join(p.realPathName, 'symlink.c9r')
+
 
 class Vault:
     "Handles a Cryptomator vault"
@@ -419,7 +423,10 @@ class Vault:
     def stat(p, virtualpath):
         "Perform os.stat on a virtual pathname"
         x = p.getInfo(virtualpath)
-        return os.stat(x.contentsC9)
+        if x.hasSym:
+            return os.stat(x.symC9)
+        else:
+            return os.stat(x.contentsC9)
 
     def mkdir(p, virtualpath):
         "Create a new directory or tree in the vault"
@@ -541,7 +548,11 @@ class Vault:
         "Create a symbolic link"
         a = p.getInfo(symlink)
         if not exists(a.realPathName): os.mkdir(a.realPathName)
-        out = open(join(a.realPathName, 'symlink.c9r'), 'wb')
+        if a.longName:
+            dn = dirname(a.nameC9)
+            if not exists(dn): os.makedirs(dn)
+            open(a.nameC9,'wb').write(a.longName)
+        out = open(a.symC9, 'wb')
         if os.name == 'nt' and target[0] == '/':
             target = calc_rel_path(target, symlink)
             print("warning: absolute target pathname won't work with Windows")
