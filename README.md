@@ -100,11 +100,14 @@ if not existent.
 files after encryption, `-F` replicates the full command line path of source
 in destination (by default only filenames are copied).
 
-`ln <target> <link>`
+`ln [-old] <target> <link>`
 make a symbolic link to a target file or directory in the vault.
 It does not check for target existence.
 An absolute target should be avoided, since it prevents portability
 (i.e. to Windows).
+When targeting a directory with `-old`, its dir.c9r file is copied to enable
+compatibility with old vault formats (i.e. with current Cryptomator for Android
+v. 1.10.3).
 
 `ls [-b] [-r] [-s NSDE-!] <virtual_path1> [...<virtual_pathN>]`
 list files and directories with minimal informations like DOS DIR (type/size,

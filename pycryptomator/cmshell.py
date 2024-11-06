@@ -196,11 +196,13 @@ class CMShell(cmd.Cmd):
     def do_ln(p, arg):
         'Make a symbolic link to a file or directory'
         argl = split(arg)
+        oldfmt = '-old' in argl
+        if oldfmt: argl.remove('-old')
         if len(argl) != 2:
-            print('use: ln <target_virtual_pathname> <symbolic_link_virtual_pathname>')
+            print('use: ln [-old] <target_virtual_pathname> <symbolic_link_virtual_pathname>')
             return
         try:
-            p.vault.ln(argl[0], p._prep_cd(argl[1]))
+            p.vault.ln(argl[0], p._prep_cd(argl[1]), oldfmt)
         except:
             perr()
 

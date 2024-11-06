@@ -544,7 +544,7 @@ class Vault:
         p.rmdir(virtualpath)
         print ('rmtree: deleted %d files in %d directories in %s' % (ff,dd,virtualpath))
             
-    def ln(p, target, symlink):
+    def ln(p, target, symlink, old_format=False):
         "Create a symbolic link"
         a = p.getInfo(symlink)
         if not exists(a.realPathName): os.mkdir(a.realPathName)
@@ -552,6 +552,10 @@ class Vault:
             dn = dirname(a.nameC9)
             if not exists(dn): os.makedirs(dn)
             open(a.nameC9,'wb').write(a.longName)
+        b = p.getInfo(target)
+        if b.isDir and old_format:
+            # copy the original dir.c9r - Cryptomator Android 1.10.3 wants this!
+            shutil.copy(b.dirC9, a.realPathName)
         out = open(a.symC9, 'wb')
         if os.name == 'nt' and target[0] == '/':
             target = calc_rel_path(target, symlink)
