@@ -161,9 +161,13 @@ class Vault:
 
     def decryptName(p, dirId, name):
         "Decrypt a .c9r name"
-        assert name[-4:] == b'.c9r'
-        dname = d64(name[:-4], 1)
-        return aes_siv_decrypt(p.pk, p.hk, dname, dirId)
+        try:
+            assert name[-4:] == b'.c9r'
+            dname = d64(name[:-4], 1)
+            return aes_siv_decrypt(p.pk, p.hk, dname, dirId)
+        except:
+            print('ERROR: could not decrypt name', name.decode())
+            return None
 
     def getInfo(p, virtualpath):
         "Query information about a vault's virtual path name and get a PathInfo object"
@@ -733,10 +737,14 @@ class Vault:
             if it.name.endswith('.c9s'): # deflated long name
                 # A c9s dir contains the original encrypted long name (name.c9s) and encrypted contents (contents.c9r)
                 ename = open(join(realpath, it.name, 'name.c9s')).read()
-                dname = p.decryptName(dirId.encode(), ename.encode()).decode()
+                dname = p.decryptName(dirId.encode(), ename.encode())
+                if dname == None: continue
+                dname = dname.decode()
                 if exists(join(realpath, it.name, 'contents.c9r')): is_dir = False
             else:
-                dname = p.decryptName(dirId.encode(), it.name.encode()).decode()
+                dname = p.decryptName(dirId.encode(), it.name.encode())
+                if dname == None: continue
+                dname = dname.decode()
             sl = join(realpath, it.name, 'symlink.c9r')
             if is_dir and exists(sl):
                 # Decrypt and look at symbolic link target
